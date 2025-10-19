@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# portscanner-mrib.py
+# portscanner-mrib.py v2f
 # Async port scanner that supports:
 #  - TCP connect scans using asyncio (no root required)
 #  - SYN and UDP scans via Scapy run in an executor (root required)
