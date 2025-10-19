@@ -12,6 +12,13 @@
 # - Optional banner grab for TCP connect mode.
 # - CSV/JSON output with only confirmed "open" results (UDP ambiguity preserved).
 
+# python3 portscanner-mrib.py --targets hotelasp.com --ports "21" --banner --csv results.csv --json results.json --pcap results.pcap
+# python3 portscanner-mrib.py --targets hotelasp.com --ports "21,22,53,135,80,443,445,50920-50930" --banner --shuffle --rate 5 --csv results.csv --json results.json --pcap results.pcap
+# python3 portscanner-mrib.py --targets 160.153.248.110 --start 1 --end 65535 --syn --pcap fullsyn_scan.pcap --rate 200 --concurrency 500
+
+
+
+
 from __future__ import annotations
 
 import argparse
@@ -45,7 +52,6 @@ except Exception:
 
 DEFAULTS: Dict[str, object] = {
     "HOST": os.environ.get("PORTSCAN_HOST", "160.153.248.110"),
-    "PORTS": os.environ.get("PORTSCAN_PORTS", "21,22,53,135,80,443,445,50920-50930"),
     "START": int(os.environ.get("PORTSCAN_START", "1")),
     "END": int(os.environ.get("PORTSCAN_END", "1024")),
     "CONCURRENCY": int(os.environ.get("PORTSCAN_CONCURRENCY", "1")),
@@ -709,7 +715,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--ports",
-        default=str(DEFAULTS["PORTS"]),
         help="Comma list and ranges, e.g. 22,80,8000-8100 (overrides start/end)",
     )
 

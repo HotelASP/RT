@@ -1,0 +1,11 @@
+[
+  {
+    "host": "160.153.248.110",
+    "port": 21,
+    "proto": "tcp",
+    "status": "open",
+    "note": "220-Microsoft FTP Service",
+    "time": "2025-10-19 18:46:03",
+    "duration_ms": 108
+  }
+]
