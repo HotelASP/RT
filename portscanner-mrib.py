@@ -17,7 +17,7 @@
 # python3 portscanner-mrib.py --targets hotelasp.com --ports "21" --banner --csv results.csv --json results.json --pcap results.pcap
 # python3 portscanner-mrib.py --targets hotelasp.com --ports "21,22,53,135,80,443,445,50920-50930" --banner --shuffle --rate 5 --csv results.csv --json results.json --pcap results.pcap
 # python3 portscanner-mrib.py --targets 160.153.248.110 --start 1 --end 65535 --syn --pcap results.pcap --rate 5 --concurrency 10 --csv results.csv --json results.json
-
+# python3 portscanner-mrib.py --targets 160.153.248.110 --start 1 --end 10 --syn --pcap --csv --json --rate 5 --concurrency 10 
 
 from __future__ import annotations
 
@@ -68,6 +68,8 @@ def utc_now_str() -> str:
     timestamp = now_utc.strftime("%Y-%m-%d %H:%M:%S")
     return timestamp
 
+def ts_utc() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
 def read_targets_from_file(path: str) -> List[str]:
     # Read targets from a text file. Return a list with one target per line.
@@ -735,12 +737,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--csv",
-        help="Write confirmed-open results to CSV file",
+        nargs="?",                 # allow optional value
+        const="AUTO",              # if provided without value -> AUTO
+        help="Write confirmed-open results to CSV file. If no filename is given, an auto timestamped one is used.",
     )
 
     parser.add_argument(
         "--json",
-        help="Write confirmed-open results to JSON file",
+        nargs="?",
+        const="AUTO",
+        help="Write confirmed-open results to JSON file. If no filename is given, an auto timestamped one is used.",
     )
 
     parser.add_argument(
@@ -791,7 +797,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--pcap",
-        help="Write packet capture(s) to pcap file. Single target uses exact filename; multiple targets write <base>.<ip>.pcap",
+        nargs="?",
+        const="AUTO",
+        help=("Write packet capture(s) to pcap file. If a single target and no filename is given, "
+              "an auto timestamped file is used. With multiple targets, writes <base>.<ip>.pcap."),
     )
 
     mode_group = parser.add_mutually_exclusive_group()
@@ -850,6 +859,21 @@ def main() -> None:
         print("No targets.")
         sys.exit(1)
 
+    # Resolve AUTO filenames once
+    _ts = ts_utc()
+
+    if args.csv == "AUTO":
+        args.csv = f"scan_csv_{_ts}.csv"
+    if args.json == "AUTO":
+        args.json = f"scan_json_{_ts}.json"
+
+    # For PCAP we keep a base; single target becomes <base>.pcap, multiple => <base>.<ip>.pcap
+    pcap_auto = (args.pcap == "AUTO")
+    pcap_base = None
+    if pcap_auto:
+        pcap_base = f"scan_pcap_{_ts}"   # no extension here
+        args.pcap = pcap_base            # reuse existing logic below
+
     # Header
     print("*** PORT SCANNER MRIB ***")
     print("")
@@ -880,15 +904,20 @@ def main() -> None:
             print("")
 
             # Start PCAP per host if requested
+
             pcap_arg = getattr(args, "pcap", None)
+            
             pcap_filename: Optional[str] = None
+
             if pcap_arg:
-                if len(targets) == 1 and pcap_arg.lower().endswith(".pcap"):
+                if len(targets) == 1 and str(pcap_arg).lower().endswith(".pcap"):
                     pcap_filename = pcap_arg
                 else:
-                    base = pcap_arg[:-5] if pcap_arg.lower().endswith(".pcap") else pcap_arg
-                    pcap_filename = f"{base}.{resolved_ip}.pcap"
+                    base = pcap_arg[:-5] if str(pcap_arg).lower().endswith(".pcap") else pcap_arg
+                    pcap_filename = f"{base}.{resolved_ip}.pcap" if len(targets) > 1 else f"{base}.pcap"                   
+
                 sniffer = start_pcap_sniffer(filter_expr=f"host {resolved_ip}")
+
                 if sniffer is None:
                     print("Warning: could not start packet sniffer for host", resolved_ip)
                 sniffer_map[resolved_ip] = (sniffer, pcap_filename)
