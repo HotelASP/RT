@@ -11,12 +11,10 @@
 # - Per-host concurrency and simple rate limiting.
 # - Optional banner grab for TCP connect mode.
 # - CSV/JSON output with only confirmed "open" results (UDP ambiguity preserved).
-
+# -------------- EXAMPLES --------------
 # python3 portscanner-mrib.py --targets hotelasp.com --ports "21" --banner --csv results.csv --json results.json --pcap results.pcap
 # python3 portscanner-mrib.py --targets hotelasp.com --ports "21,22,53,135,80,443,445,50920-50930" --banner --shuffle --rate 5 --csv results.csv --json results.json --pcap results.pcap
 # python3 portscanner-mrib.py --targets 160.153.248.110 --start 1 --end 65535 --syn --pcap fullsyn_scan.pcap --rate 200 --concurrency 500
-
-
 
 
 from __future__ import annotations
