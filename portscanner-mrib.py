@@ -335,8 +335,7 @@ def main():
     - Dump CSV/JSON files for open results
     """
     p = argparse.ArgumentParser(description="Async port scanner with asyncio + Scapy")
-    p.add_argument("--targets", required=False, default=DEFAULTS["HOST"],
-                   help="Host/IP/CIDR or a file with one target per line")
+    p.add_argument("--targets", required=False, default=DEFAULTS["HOST"],help="Host/IP/CIDR or a file with one target per line")
     p.add_argument("--start", type=int, default=DEFAULTS["START"], help="Start port")
     p.add_argument("--end", type=int, default=DEFAULTS["END"], help="End port")
     p.add_argument("--ports", default=DEFAULTS["PORTS"],help="Comma list and ranges, e.g. 22,80,8000-8100 (overrides start/end)")
