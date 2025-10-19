@@ -25,7 +25,7 @@ import socket
 import sys
 import time
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 
 # -----------------------------------------------------------------------------
@@ -45,7 +45,7 @@ except Exception:
 
 DEFAULTS: Dict[str, object] = {
     "HOST": os.environ.get("PORTSCAN_HOST", "160.153.248.110"),
-    "PORTS": os.environ.get("PORTSCAN_PORTS", "21,22,135,80,443,445,50920-50930"),
+    "PORTS": os.environ.get("PORTSCAN_PORTS", "21,22,53,135,80,443,445,50920-50930"),
     "START": int(os.environ.get("PORTSCAN_START", "1")),
     "END": int(os.environ.get("PORTSCAN_END", "1024")),
     "CONCURRENCY": int(os.environ.get("PORTSCAN_CONCURRENCY", "1")),
@@ -649,6 +649,33 @@ def ensure_prerequisites_for_scapy(mode: str) -> None:
 
 
 # -----------------------------------------------------------------------------
+# PCAP sniffer helpers (Scapy AsyncSniffer)
+# -----------------------------------------------------------------------------
+
+def start_pcap_sniffer(filter_expr: Optional[str] = None) -> Any:
+    # Starts a Scapy AsyncSniffer and returns it. Returns None on failure.
+    if not SCAPY_AVAILABLE:
+        return None
+    try:
+        sniffer = scapy.AsyncSniffer(filter=filter_expr)
+        sniffer.start()
+        return sniffer
+    except Exception:
+        return None
+
+
+def stop_and_write_sniffer(sniffer: Any, filename: str) -> None:
+    # Stops sniffer and writes captured packets to filename using wrpcap.
+    if sniffer is None:
+        return
+    try:
+        packets = sniffer.stop()
+        scapy.wrpcap(filename, packets if packets else [])
+    except Exception as exc:
+        print(f"Failed to write pcap {filename}: {type(exc).__name__}")
+
+
+# -----------------------------------------------------------------------------
 # CLI and main program
 # -----------------------------------------------------------------------------
 
@@ -757,6 +784,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="UDP payload strategy",
     )
 
+    parser.add_argument(
+        "--pcap",
+        help="Write packet capture(s) to pcap file. Single target uses exact filename; multiple targets write <base>.<ip>.pcap",
+    )
+
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument(
         "--syn",
@@ -799,6 +831,12 @@ def main() -> None:
     if args.udp:
         mode = "udp"
 
+    # If PCAP requested, require Scapy as well.
+    if getattr(args, "pcap", None):
+        if not SCAPY_AVAILABLE:
+            print("Scapy required for --pcap. Install with: pip install scapy")
+            sys.exit(2)
+
     ensure_prerequisites_for_scapy(mode)
 
     # Targets
@@ -828,10 +866,27 @@ def main() -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
+        # Map resolved_ip -> (sniffer, filename) when --pcap is enabled
+        sniffer_map: Dict[str, Any] = {}
+
         for target_label in targets:
             resolved_ip = loop.run_until_complete(resolve_to_ip(target_label))
             print(f"TARGET {target_label} -> {resolved_ip}")
             print("")
+
+            # Start PCAP per host if requested
+            pcap_arg = getattr(args, "pcap", None)
+            pcap_filename: Optional[str] = None
+            if pcap_arg:
+                if len(targets) == 1 and pcap_arg.lower().endswith(".pcap"):
+                    pcap_filename = pcap_arg
+                else:
+                    base = pcap_arg[:-5] if pcap_arg.lower().endswith(".pcap") else pcap_arg
+                    pcap_filename = f"{base}.{resolved_ip}.pcap"
+                sniffer = start_pcap_sniffer(filter_expr=f"host {resolved_ip}")
+                if sniffer is None:
+                    print("Warning: could not start packet sniffer for host", resolved_ip)
+                sniffer_map[resolved_ip] = (sniffer, pcap_filename)
 
             open_for_host = loop.run_until_complete(
                 scan_host_ports(
@@ -852,6 +907,13 @@ def main() -> None:
             # Extend the aggregate with open results for this host
             for record in open_for_host:
                 all_open_results.append(record)
+
+            # Stop sniffer and write PCAP for this host if enabled
+            if getattr(args, "pcap", None):
+                sniffer, filename = sniffer_map.get(resolved_ip, (None, None))
+                if filename:
+                    stop_and_write_sniffer(sniffer, filename)
+                    print(f"pcap -> {filename}")
 
         loop.close()
 

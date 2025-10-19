@@ -1,107 +1,22 @@
 --- a/portscanner-mrib.py
 +++ b/portscanner-mrib.py
-@@ -1,6 +1,7 @@
- #!/usr/bin/env python3
- # --------------
- # Asynchronous port scanner with three modes:
-+#   + PCAP capture option (--pcap)
- #   1) TCP connect scan using asyncio (no root)
- #   2) TCP SYN scan using Scapy (root)
- #   3) UDP probe using Scapy (root)
- # --------------
-@@
- import argparse
- import asyncio
- import csv
- import ipaddress
- import json
- import os
- import random
- import socket
+@@ -22,7 +22,7 @@
  import sys
  import time
  from datetime import datetime, timezone
- from typing import Dict, List, Optional, Tuple
-+from typing import Any
- 
- 
- # -----------------------------------------------------------------------------
- # Optional Scapy import
- # -----------------------------------------------------------------------------
- 
- try:
-     import scapy.all as scapy
-     from scapy.packet import Raw
-     SCAPY_AVAILABLE: bool = True
- except Exception:
-     SCAPY_AVAILABLE = False
-@@
- def build_arg_parser() -> argparse.ArgumentParser:
-    # Build and return the CLI argument parser.
- 
-     parser = argparse.ArgumentParser(
-         description="Readable async port scanner (asyncio + optional Scapy)"
-     )
-@@
-     parser.add_argument(
-         "--udp-probe",
-         choices=["empty", "dns", "ntp"],
-         default="empty",
-         help="UDP payload strategy",
-     )
- 
-+    parser.add_argument(
-+        "--pcap",
-+        help="Write packet capture(s) to pcap file. If multiple targets then files are named <pcap>.<ip>.pcap",
-+    )
-+
-     mode_group = parser.add_mutually_exclusive_group()
-     mode_group.add_argument(
-         "--syn",
-         action="store_true",
-         help="SYN scan (root + scapy)",
-     )
-     mode_group.add_argument(
-         "--udp",
-         action="store_true",
-         help="UDP scan (root + scapy)",
-     )
- 
-     return parser
-@@
- def ensure_prerequisites_for_scapy(mode: str) -> None:
-     # Validate that Scapy is available and we have root privileges
-     # when mode requires raw sockets ("syn" or "udp").
-     # Exits with status 2 on failure.
- 
--    if mode not in ("syn", "udp"):
-+    if mode not in ("syn", "udp"):
-         return
- 
-     if not SCAPY_AVAILABLE:
-         print("Scapy not available. Install with: pip install scapy")
-         sys.exit(2)
- 
-     # On Unix-like systems, geteuid exists. On Windows it does not.
-     try:
-         euid = os.geteuid()
-     except AttributeError:
-         # Cannot verify. Provide a warning and continue. Raw sockets may fail.
-         print("Warning: cannot verify root privileges on this OS. SYN/UDP may fail.")
-         return
- 
-     if euid != 0:
+-from typing import Dict, List, Optional, Tuple
++from typing import Dict, List, Optional, Tuple, Any
+
+@@ -408,6 +408,45 @@
          print("Root privileges required for --syn or --udp. Rerun with sudo.")
          sys.exit(2)
-+
 +
 +# -----------------------------------------------------------------------------
 +# PCAP sniffer helpers (Scapy AsyncSniffer)
 +# -----------------------------------------------------------------------------
 +
 +def start_pcap_sniffer(filter_expr: Optional[str] = None) -> Any:
-+    # Starts a Scapy AsyncSniffer and returns it.
-+    # Returns None if Scapy is not available.
++    # Starts a Scapy AsyncSniffer and returns it. Returns None on failure.
 +    if not SCAPY_AVAILABLE:
 +        return None
 +    try:
@@ -118,106 +33,18 @@
 +        return
 +    try:
 +        packets = sniffer.stop()
-+        # scapy.AsyncSniffer.stop() returns the captured packets list.
-+        if packets:
-+            scapy.wrpcap(filename, packets)
-+        else:
-+            # create empty pcap (scapy will still create file with global header)
-+            scapy.wrpcap(filename, [])
++        scapy.wrpcap(filename, packets if packets else [])
 +    except Exception as exc:
 +        print(f"Failed to write pcap {filename}: {type(exc).__name__}")
-@@
- def main() -> None:
-@@
-     parser = build_arg_parser()
-     args = parser.parse_args()
- 
-     # Ports
-@@
-     # Mode
-     mode = "connect"
-     if args.syn:
-         mode = "syn"
-     if args.udp:
-         mode = "udp"
- 
--    ensure_prerequisites_for_scapy(mode)
-+    # If pcap requested we require Scapy too (for AsyncSniffer).
-+    require_scapy_for_pcap = bool(getattr(args, "pcap", None))
-+    if require_scapy_for_pcap and not SCAPY_AVAILABLE:
-+        print("Scapy required for --pcap. Install with: pip install scapy")
-+        sys.exit(2)
 +
-+    ensure_prerequisites_for_scapy(mode)
- 
-     # Targets
-     targets = expand_targets(args.targets)
-     if len(targets) == 0:
-         print("No targets.")
-         sys.exit(1)
-@@
-     try:
-         loop = asyncio.new_event_loop()
-         asyncio.set_event_loop(loop)
- 
-+        # PCAP sniffers per host (if requested)
-+        sniffer_map: Dict[str, Any] = {}
+@@ -479,6 +518,11 @@
+         help="UDP payload strategy",
+     )
 +
-         for target_label in targets:
-             resolved_ip = loop.run_until_complete(resolve_to_ip(target_label))
-             print(f"TARGET {target_label} -> {resolved_ip}")
-             print("")
--
-+            # Start PCAP sniffer for this host if requested.
-+            pcap_arg = getattr(args, "pcap", None)
-+            pcap_filename: Optional[str] = None
-+            if pcap_arg:
-+                # If single target and filename ends with .pcap then use it exactly.
-+                if len(targets) == 1 and pcap_arg.lower().endswith(".pcap"):
-+                    pcap_filename = pcap_arg
-+                else:
-+                    # create per-host pcap files: <pcap>.<ip>.pcap
-+                    base = pcap_arg
-+                    # strip trailing .pcap if present to avoid double .pcap
-+                    if base.lower().endswith(".pcap"):
-+                        base = base[:-5]
-+                    pcap_filename = f"{base}.{resolved_ip}.pcap"
-+
-+                sniffer = start_pcap_sniffer(filter_expr=f"host {resolved_ip}")
-+                if sniffer is None:
-+                    print("Warning: could not start packet sniffer for host", resolved_ip)
-+                sniffer_map[resolved_ip] = (sniffer, pcap_filename)
-+
-             open_for_host = loop.run_until_complete(
-                 scan_host_ports(
-                     host_ip=resolved_ip,
-                     ports=ports,
-                     mode=mode,
-                     timeout_seconds=args.timeout,
-                     max_concurrency=max(1, args.concurrency),
-                     show_closed=args.show_closed,
-                     banner_enabled=args.banner,
-                     ops_per_sec=max(0, args.rate),
-                     udp_probe_kind=args.udp_probe,
-                     retries=max(1, args.retries),
-                     backoff_seconds=max(0.0, args.retry_backoff),
-                 )
-             )
++    parser.add_argument(
++        "--pcap",
++        help="Write packet capture(s) to pcap file. Single target uses exact filename; multiple targets write <base>.<ip>.pcap",
++    )
+@@ -520,6 +564,13 @@
+
  
-             # Extend the aggregate with open results for this host
-             for record in open_for_host:
-                 all_open_results.append(record)
-+
-+            # Stop sniffer and write pcap for this host if enabled
-+            if getattr(args, "pcap", None):
-+                sniffer, filename = sniffer_map.get(resolved_ip, (None, None))
-+                if filename:
-+                    stop_and_write_sniffer(sniffer, filename)
-+                    print(f"pcap -> {filename}")
- 
-         loop.close()
- 
-     except KeyboardInterrupt:
-         print("Interrupted.")
-         sys.exit(130)
-*** End Patch***
