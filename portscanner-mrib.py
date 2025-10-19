@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # --------------
 # Asynchronous port scanner with three modes:
+#   + PCAP capture option (--pcap)
 #   1) TCP connect scan using asyncio (no root)
 #   2) TCP SYN scan using Scapy (root)
 #   3) UDP probe using Scapy (root)
