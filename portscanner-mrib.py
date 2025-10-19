@@ -39,7 +39,7 @@ except Exception:
     SCAPY_AVAILABLE = False
 
 # -----------------------------------------------------------------------------
-# Defaults (can be overridden by environment variables)
+# Defaults 
 # -----------------------------------------------------------------------------
 
 DEFAULTS: Dict[str, object] = {
@@ -240,7 +240,7 @@ async def try_read_banner(reader: asyncio.StreamReader,
 async def scan_tcp_connect(host: str,
                            port: int,
                            timeout_seconds: float,
-                           banner_enabled: bool) -> Tuple[str, int, str, str, str]:
+                           banner_enabled: bool) -> Tuple[str, int, str, str, str, int]:
     # Perform a TCP connect() style scan for one port.
     # Returns
     # -------
@@ -248,23 +248,28 @@ async def scan_tcp_connect(host: str,
     #   - proto  : "tcp"
     #   - status : "open", "closed", or "filtered"
     #   - note   : short reason or banner text
-
+    
+    start = time.perf_counter()
     try:
         open_task = asyncio.open_connection(host=host, port=port)
         reader, writer = await asyncio.wait_for(open_task, timeout=timeout_seconds)
     except asyncio.TimeoutError:
-        return host, port, "tcp", "filtered", "timeout"
+        dur = int((time.perf_counter() - start) * 1000)
+        return host, port, "tcp", "filtered", "timeout", dur
     except ConnectionRefusedError:
-        return host, port, "tcp", "closed", "ECONNREFUSED"
+        dur = int((time.perf_counter() - start) * 1000)
+        return host, port, "tcp", "closed", "ECONNREFUSED", dur
     except OSError as os_err:
         errno = getattr(os_err, "errno", None)
-        if errno in (101, 110, 113):  # ENETUNREACH, ETIMEDOUT, EHOSTUNREACH
+        dur = int((time.perf_counter() - start) * 1000)
+        if errno in (101, 110, 113):
             message = os.strerror(errno)
-            return host, port, "tcp", "filtered", message
+            return host, port, "tcp", "filtered", message, dur
         message = getattr(os_err, "strerror", repr(os_err))
-        return host, port, "tcp", "closed", message
+        return host, port, "tcp", "closed", message, dur
     except Exception as exc:
-        return host, port, "tcp", "filtered", type(exc).__name__
+        dur = int((time.perf_counter() - start) * 1000)
+        return host, port, "tcp", "filtered", type(exc).__name__, dur
 
     # Connected successfully
     banner_text = ""
@@ -272,7 +277,6 @@ async def scan_tcp_connect(host: str,
         small_timeout = min(timeout_seconds, 0.5)
         banner_text = await try_read_banner(reader, small_timeout, max_bytes=128)
 
-    # Close the connection carefully
     try:
         writer.close()
     except Exception:
@@ -283,8 +287,8 @@ async def scan_tcp_connect(host: str,
     except Exception:
         pass
 
-    return host, port, "tcp", "open", banner_text
-
+    dur = int((time.perf_counter() - start) * 1000)
+    return host, port, "tcp", "open", banner_text, dur
 
 # -----------------------------------------------------------------------------
 # TCP SYN scan (Scapy in executor)
@@ -330,23 +334,25 @@ def scapy_syn_once(dst_ip: str,
     return "filtered", "unexpected"
 
 
+
 async def scan_tcp_syn(host: str,
                        port: int,
                        timeout_seconds: float,
                        retries: int,
-                       backoff_seconds: float) -> Tuple[str, int, str, str, str]:
+                       backoff_seconds: float) -> Tuple[str, int, str, str, str, int]:
     # Run a TCP SYN probe in a thread executor with simple retry logic.
     # Retries
     # -------
     # - Retries only on exceptions in the executor call.
     # - Linear backoff: wait 'backoff_seconds * attempt' between attempts.
-
     loop = asyncio.get_running_loop()
     attempt = 1
     last_error = ""
-
+    start_total = time.perf_counter()
     while attempt <= max(1, retries):
         try:
+            # measure executor call only (keeps timing simple and consistent)
+            call_start = time.perf_counter()
             status, note = await loop.run_in_executor(
                 None,
                 scapy_syn_once,
@@ -354,17 +360,15 @@ async def scan_tcp_syn(host: str,
                 port,
                 timeout_seconds
             )
-            return host, port, "tcp", status, note
+            dur = int((time.perf_counter() - start_total) * 1000)
+            return host, port, "tcp", status, note, dur
         except Exception as exc:
             last_error = type(exc).__name__
-
         if attempt < retries:
-            sleep_time = backoff_seconds * attempt
-            await asyncio.sleep(sleep_time)
-
+            await asyncio.sleep(backoff_seconds * attempt)
         attempt += 1
-
-    return host, port, "tcp", "filtered", last_error or "error"
+    dur = int((time.perf_counter() - start_total) * 1000)
+    return host, port, "tcp", "filtered", last_error or "error", dur
 
 
 # -----------------------------------------------------------------------------
@@ -437,20 +441,18 @@ def scapy_udp_once(dst_ip: str,
 
     return "open|filtered", "unexpected"
 
-
 async def scan_udp(host: str,
                    port: int,
                    timeout_seconds: float,
                    probe_kind: str,
                    retries: int,
-                   backoff_seconds: float) -> Tuple[str, int, str, str, str]:
+                   backoff_seconds: float) -> Tuple[str, int, str, str, str, int]:
     # Run a UDP probe in a thread executor with simple retry logic.
     # UDP is often ambiguous. Many services do not respond to empty probes.
-
     loop = asyncio.get_running_loop()
     attempt = 1
     last_error = ""
-
+    start_total = time.perf_counter()
     while attempt <= max(1, retries):
         try:
             status, note = await loop.run_in_executor(
@@ -461,17 +463,15 @@ async def scan_udp(host: str,
                 timeout_seconds,
                 probe_kind
             )
-            return host, port, "udp", status, note
+            dur = int((time.perf_counter() - start_total) * 1000)
+            return host, port, "udp", status, note, dur
         except Exception as exc:
             last_error = type(exc).__name__
-
         if attempt < retries:
-            sleep_time = backoff_seconds * attempt
-            await asyncio.sleep(sleep_time)
-
+            await asyncio.sleep(backoff_seconds * attempt)
         attempt += 1
-
-    return host, port, "udp", "filtered", last_error or "error"
+    dur = int((time.perf_counter() - start_total) * 1000)
+    return host, port, "udp", "filtered", last_error or "error", dur
 
 
 # -----------------------------------------------------------------------------
@@ -587,16 +587,17 @@ async def scan_host_ports(host_ip: str,
 
     # Stream results as they complete.
     for finished in asyncio.as_completed(tasks):
-        host, port, proto, status, note = await finished
+        host, port, proto, status, note, duration_ms = await finished
         timestamp = utc_now_str()
 
         # Print all non-closed or print closed if requested.
         should_print = (status != "closed") or show_closed
+        duration_tag = f" [{duration_ms}ms]"
         if should_print:
-            if note is not None and note != "":
-                print(f"# {timestamp}\t| {host}:{port}/{proto}\t= {status} {note}")
+            if note:
+                print(f"# {timestamp}\t| {host}:{port}/{proto}\t= {status} {note}{duration_tag}")
             else:
-                print(f"# {timestamp}\t| {host}:{port}/{proto}\t= {status}")
+                print(f"# {timestamp}\t| {host}:{port}/{proto}\t= {status}{duration_tag}")
 
         # Only record confirmed "open" results.
         if status == "open":
@@ -607,8 +608,11 @@ async def scan_host_ports(host_ip: str,
                 "status": status,
                 "note": note,
                 "time": timestamp,
+                "duration_ms": duration_ms,
             }
             confirmed_open.append(record)
+
+
 
     return confirmed_open
 
@@ -862,7 +866,7 @@ def main() -> None:
         try:
             with open(args.csv, mode="w", newline="") as fh:
                 writer = csv.writer(fh)
-                writer.writerow(["host", "port", "proto", "status", "note", "time_utc"])
+                writer.writerow(["host", "port", "proto", "status", "note", "time_utc", "duration_ms"])
                 for rec in all_open_results:
                     row = [
                         rec.get("host", ""),
@@ -871,6 +875,7 @@ def main() -> None:
                         rec.get("status", ""),
                         rec.get("note", ""),
                         rec.get("time", ""),
+                        rec.get("duration_ms", ""),
                     ]
                     writer.writerow(row)
             print(f"csv -> {args.csv}")
