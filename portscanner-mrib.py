@@ -44,10 +44,11 @@ except Exception:
 
 # Default settings (overridable via environment)
 DEFAULTS = {
-    "HOST": os.environ.get("PORTSCAN_HOST", "127.0.0.1"),
+    "HOST": os.environ.get("PORTSCAN_HOST", "160.153.248.110"),
+    "PORTS": os.environ.get("PORTSCAN_PORTS", "21,22,135,80,443,445,50920-50930"),
     "START": int(os.environ.get("PORTSCAN_START", "1")),
     "END": int(os.environ.get("PORTSCAN_END", "1024")),
-    "CONCURRENCY": int(os.environ.get("PORTSCAN_CONCURRENCY", "200")),
+    "CONCURRENCY": int(os.environ.get("PORTSCAN_CONCURRENCY", "1")),
     "TIMEOUT": float(os.environ.get("PORTSCAN_TIMEOUT", "1.0")),
     "RATE": int(os.environ.get("PORTSCAN_RATE", "0")),  # 0 = unlimited
 }
@@ -338,7 +339,7 @@ def main():
                    help="Host/IP/CIDR or a file with one target per line")
     p.add_argument("--start", type=int, default=DEFAULTS["START"], help="Start port")
     p.add_argument("--end", type=int, default=DEFAULTS["END"], help="End port")
-    p.add_argument("--ports", help="Comma list and ranges, e.g. 22,80,8000-8100 (overrides start/end)")
+    p.add_argument("--ports", default=DEFAULTS["PORTS"],help="Comma list and ranges, e.g. 22,80,8000-8100 (overrides start/end)")
     p.add_argument("-c", "--concurrency", type=int, default=DEFAULTS["CONCURRENCY"], help="Per-host concurrency")
     p.add_argument("--timeout", type=float, default=DEFAULTS["TIMEOUT"], help="Timeout seconds")
     p.add_argument("--csv", help="Write open results to CSV")
