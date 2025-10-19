@@ -244,11 +244,12 @@ async def scan_tcp_connect(host: str,
     # Perform a TCP connect() style scan for one port.
     # Returns
     # -------
-    # (host, port, proto, status, note)
+    # (host, port, proto, status, note, time)
     #   - proto  : "tcp"
     #   - status : "open", "closed", or "filtered"
     #   - note   : short reason or banner text
-    
+    #   - time : time in milliseconds
+
     start = time.perf_counter()
     try:
         open_task = asyncio.open_connection(host=host, port=port)

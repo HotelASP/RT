@@ -1,0 +1,117 @@
+@@
+-from typing import Dict, List, Optional, Tuple
++from typing import Dict, List, Optional, Tuple
+@@
+-# Defaults 
++# Defaults
+@@
+ async def scan_tcp_connect(host: str,
+                            port: int,
+                            timeout_seconds: float,
+-                           banner_enabled: bool) -> Tuple[str, int, str, str, str, int]:
++                           banner_enabled: bool) -> Tuple[str, int, str, str, str, int]:
+@@
+-    # Perform a TCP connect() style scan for one port.
+-    # Returns
+-    # -------
+-    # (host, port, proto, status, note)
+-    #   - proto  : "tcp"
+-    #   - status : "open", "closed", or "filtered"
+-    #   - note   : short reason or banner text
++    # TCP connect() scan for one port.
++    # Returns a 6-tuple: (host, port, "tcp", status, note, duration_ms).
+@@
+-# TCP SYN scan (Scapy in executor)
++# TCP SYN scan (Scapy in executor)
+@@
+ async def scan_tcp_syn(host: str,
+                        port: int,
+                        timeout_seconds: float,
+                        retries: int,
+                        backoff_seconds: float) -> Tuple[str, int, str, str, str, int]:
+@@
+-    # Run a TCP SYN probe in a thread executor with simple retry logic.
+-    # Retries
+-    # -------
+-    # - Retries only on exceptions in the executor call.
+-    # - Linear backoff: wait 'backoff_seconds * attempt' between attempts.
++    # Run a TCP SYN probe in a thread executor with simple retry logic.
++    # Retries only on exceptions; total duration includes backoff waits.
+     loop = asyncio.get_running_loop()
+     attempt = 1
+     last_error = ""
+     start_total = time.perf_counter()
+     while attempt <= max(1, retries):
+         try:
+-            # measure executor call only (keeps timing simple and consistent)
+-            call_start = time.perf_counter()
+             status, note = await loop.run_in_executor(
+                 None,
+                 scapy_syn_once,
+                 host,
+                 port,
+                 timeout_seconds
+             )
+             dur = int((time.perf_counter() - start_total) * 1000)
+             return host, port, "tcp", status, note, dur
+@@
+-# UDP scan (Scapy in executor)
++# UDP scan (Scapy in executor)
+@@
+ def build_udp_payload(dst_port: int, probe_kind: str):
+-    # Build optional UDP payload for protocol-aware probing.
+-    # Options
+-    # -------
+-    # - "empty" : no payload
+-    # - "dns"   : standard A query for 'example.com' (only for port 53)
+-    # - "ntp"   : 48-byte client request (only for port 123)
++    # Optional UDP payload for protocol-aware probing.
++    # - "empty": no payload
++    # - "dns" : standard A query for 'example.com' (only if port 53)
++    # - "ntp" : 48-byte client request (only if port 123)
+@@
+ class FixedRateLimiter:
+-    # Enforce a minimum interval between operations.
+-    # rate_ops_per_sec : int
+-    #     Operations per second. If <= 0, rate limiting is disabled.
+-    # - Uses a single asyncio.Lock to serialize timestamp updates.
+-    # - Intended to be used per host to avoid bursts.
++    # Enforce a minimum interval between operations per host.
++    # rate_ops_per_sec <= 0 disables limiting.
+@@
+ async def scan_host_ports(host_ip: str,
+                           ports: List[int],
+                           mode: str,
+                           timeout_seconds: float,
+                           max_concurrency: int,
+                           show_closed: bool,
+                           banner_enabled: bool,
+                           ops_per_sec: int,
+                           udp_probe_kind: str,
+                           retries: int,
+                           backoff_seconds: float) -> List[Dict[str, object]]:
+@@
+-    async def run_one_port(port: int) -> Tuple[str, int, str, str, str]:
+-        #Dispatch one port scan according to 'mode'.
++    async def run_one_port(port: int) -> Tuple[str, int, str, str, str, int]:
++        # Dispatch one port scan according to 'mode'.
+@@
+-            return host_ip, port, "tcp", "error", "unknown-mode"
++            return host_ip, port, "tcp", "error", "unknown-mode", 0
+@@
+-    tasks: List[asyncio.Task] = []
+-    for p in ports:
+-        task = asyncio.create_task(run_one_port(p))        
+-        tasks.append(task)
++    tasks: List[asyncio.Task] = [asyncio.create_task(run_one_port(p)) for p in ports]
+@@
+-        # Only record confirmed "open" results.
++        # Record only confirmed \"open\" results.
+@@
+-    return confirmed_open
++    return confirmed_open
+@@
+-def build_arg_parser() -> argparse.ArgumentParser:
+-   # Build and return the CLI argument parser.
++def build_arg_parser() -> argparse.ArgumentParser:
++    # Build and return the CLI argument parser.
