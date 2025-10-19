@@ -19,8 +19,8 @@
 # Notes:
 #  - Use --syn or --udp only with root and Scapy installed.
 #  - Connect mode uses asyncio.open_connection and behaves like "tcp connect".
-#  - UDP mode sends single UDP packet and waits for ICMP reply.
-#  - Rate limiting is a simple token-bucket-like limiter implemented as fixed intervals.
+#  - UDP mode can send protocol-aware payloads (dns/ntp) or empty packets.
+#  - Rate limiting is a simple fixed-interval throttle.
 
 import argparse
 import asyncio
@@ -38,6 +38,7 @@ from typing import List, Tuple, Optional
 # Try to import scapy. If import fails the script continues but --syn/--udp will exit later.
 try:
     import scapy.all as scapy
+    from scapy.packet import Raw
     SCAPY = True
 except Exception:
     SCAPY = False
@@ -54,8 +55,8 @@ DEFAULTS = {
 }
 
 def now_utc():
-    """Return current time in ISO8601 UTC string."""
-    return datetime.now(timezone.utc).isoformat()
+    dstr = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S") 
+    return dstr
 
 def parse_targets(arg: str) -> List[str]:
     """
@@ -135,7 +136,6 @@ async def scan_port_connect(host: str, port: int, timeout: float, banner: bool) 
         try:
             await writer.wait_closed()
         except Exception:
-            # Some transports don't implement wait_closed; ignore.
             pass
         return host, port, "tcp", "open", note
     except asyncio.TimeoutError:
@@ -143,7 +143,6 @@ async def scan_port_connect(host: str, port: int, timeout: float, banner: bool) 
     except ConnectionRefusedError:
         return host, port, "tcp", "closed", "ECONNREFUSED"
     except OSError as e:
-        # Map common errno to filtered vs closed
         if getattr(e, "errno", None) in (101, 113, 110):  # ENETUNREACH, EHOSTUNREACH, ETIMEDOUT
             return host, port, "tcp", "filtered", os.strerror(e.errno)
         return host, port, "tcp", "closed", getattr(e, "strerror", repr(e))
@@ -167,35 +166,54 @@ def _scapy_syn_once(dst: str, dport: int, timeout: float):
     if ans.haslayer(scapy.TCP):
         f = ans[scapy.TCP].flags
         if f & 0x12 == 0x12:  # SYN+ACK
-            # polite cleanup: send RST so server doesn't see a completed handshake later
             scapy.send(scapy.IP(dst=dst)/scapy.TCP(dport=dport, flags="R"), verbose=0)
             return "open", "SYN-ACK"
         if f & 0x14 == 0x14 or f & 0x04 == 0x04:  # RST
             return "closed", "RST"
     return "filtered", "unexpected"
 
-async def scan_port_syn(host: str, port: int, timeout: float) -> Tuple[str, int, str, str, str]:
+async def scan_port_syn(host: str, port: int, timeout: float, retries: int = 1, backoff: float = 0.2) -> Tuple[str, int, str, str, str]:
     """
-    Asynchronous wrapper around the blocking scapy SYN probe.
-    Uses run_in_executor to avoid blocking the event loop.
+    Async wrapper for SYN probe with retries and simple backoff.
     """
     loop = asyncio.get_running_loop()
-    try:
-        status, note = await loop.run_in_executor(None, _scapy_syn_once, host, port, timeout)
-        return host, port, "tcp", status, note
-    except Exception as e:
-        return host, port, "tcp", "filtered", type(e).__name__
+    last_note = ""
+    for attempt in range(1, max(1, retries) + 1):
+        try:
+            status, note = await loop.run_in_executor(None, _scapy_syn_once, host, port, timeout)
+            return host, port, "tcp", status, note
+        except Exception as e:
+            last_note = type(e).__name__
+        if attempt < retries:
+            await asyncio.sleep(backoff * attempt)
+    return host, port, "tcp", "filtered", last_note or "error"
 
-def _scapy_udp_once(dst: str, dport: int, timeout: float):
+def _udp_payload_for_probe(dport: int, probe: str):
+    """
+    Build protocol-aware UDP payloads.
+    - empty: no payload
+    - dns: standard A query for example.com (port 53)
+    - ntp: client request (48 bytes) (port 123)
+    """
+    if probe == "dns" and dport == 53:
+        return scapy.DNS(rd=1, qd=scapy.DNSQR(qname="example.com"))
+    if probe == "ntp" and dport == 123:
+        # LI=0 VN=3 Mode=3 (client). Classic 0x1b followed by zeros.
+        return Raw(b"\x1b" + b"\x00"*47)
+    return None
+
+def _scapy_udp_once(dst: str, dport: int, timeout: float, probe: str):
     """
     Blocking scapy UDP probe:
-      - send an empty UDP packet to dst:dport and wait for reply
-      - If no response -> "open|filtered" (UDP is ambiguous)
+      - send a UDP packet to dst:dport and wait for reply
       - If ICMP type 3 code 3 (port unreachable) -> "closed"
+      - If UDP application reply -> "open"
+      - If no response -> "open|filtered" (ambiguous)
       - Other ICMP -> "filtered"
-    This is an interpretation commonly used by UDP scanners like nmap.
     """
-    pkt = scapy.IP(dst=dst)/scapy.UDP(dport=dport)
+    payload = _udp_payload_for_probe(dport, probe)
+    base = scapy.IP(dst=dst)/scapy.UDP(dport=dport)
+    pkt = base/payload if payload is not None else base
     ans = scapy.sr1(pkt, timeout=timeout, verbose=0)
     if ans is None:
         return "open|filtered", "no-response"
@@ -204,22 +222,32 @@ def _scapy_udp_once(dst: str, dport: int, timeout: float):
         if icmp.type == 3 and icmp.code == 3:
             return "closed", "icmp-port-unreachable"
         return "filtered", f"icmp type={icmp.type} code={icmp.code}"
+    # Application-level confirmations
+    if probe == "dns" and ans.haslayer(scapy.DNS):
+        return "open", "dns-reply"
+    if ans.haslayer(scapy.UDP) and len(bytes(ans[scapy.UDP].payload)) > 0:
+        return "open", "udp-reply"
     return "open|filtered", "unexpected"
 
-async def scan_port_udp(host: str, port: int, timeout: float) -> Tuple[str, int, str, str, str]:
+async def scan_port_udp(host: str, port: int, timeout: float, probe: str, retries: int = 1, backoff: float = 0.2) -> Tuple[str, int, str, str, str]:
     """
-    Async wrapper for UDP probe. Same pattern as SYN wrapper.
+    Async wrapper for UDP probe with retries and simple backoff.
     """
     loop = asyncio.get_running_loop()
-    try:
-        status, note = await loop.run_in_executor(None, _scapy_udp_once, host, port, timeout)
-        return host, port, "udp", status, note
-    except Exception as e:
-        return host, port, "udp", "filtered", type(e).__name__
+    last_note = ""
+    for attempt in range(1, max(1, retries) + 1):
+        try:
+            status, note = await loop.run_in_executor(None, _scapy_udp_once, host, port, timeout, probe)
+            return host, port, "udp", status, note
+        except Exception as e:
+            last_note = type(e).__name__
+        if attempt < retries:
+            await asyncio.sleep(backoff * attempt)
+    return host, port, "udp", "filtered", last_note or "error"
 
 class RateLimiter:
     """
-    Very simple rate limiter implemented as a fixed-interval token bucket.
+    Very simple rate limiter implemented as a fixed-interval throttle.
     It enforces a minimal interval between operations.
     rate = ops per second. If rate <= 0, unlimited.
     This is per-host limiter in the script.
@@ -250,7 +278,10 @@ async def scan_host(
     concurrency: int,
     show_closed: bool,
     banner: bool,
-    rate: int
+    rate: int,
+    udp_probe: str,
+    retries: int,
+    backoff: float,
 ):
     """
     Scan a single resolved host.
@@ -261,7 +292,9 @@ async def scan_host(
     - show_closed: if True print closed ports too
     - banner: if True attempt banner grab on TCP connect
     - rate: ops/sec per host (0 = unlimited)
-    Returns list of result dicts for ports that included "open" in their status.
+    - udp_probe: 'empty' | 'dns' | 'ntp'
+    - retries/backoff: for SYN/UDP probes
+    Returns list of result dicts for ports with status == "open".
     """
     sem = asyncio.Semaphore(concurrency)
     limiter = RateLimiter(rate)
@@ -274,9 +307,9 @@ async def scan_host(
             if mode == "connect":
                 return await scan_port_connect(host, p, timeout, banner)
             if mode == "syn":
-                return await scan_port_syn(host, p, timeout)
+                return await scan_port_syn(host, p, timeout, retries=retries, backoff=backoff)
             if mode == "udp":
-                return await scan_port_udp(host, p, timeout)
+                return await scan_port_udp(host, p, timeout, probe=udp_probe, retries=retries, backoff=backoff)
             return host, p, "tcp", "error", "unknown-mode"
 
     # Schedule all port tasks upfront but they will respect sem and limiter.
@@ -289,20 +322,19 @@ async def scan_host(
         ts = now_utc()
         if status != "closed" or show_closed:
             line_note = f" {note}" if note else ""
-            print(f"{ts} {h}:{p}/{proto} {status}{line_note}")
-        if "open" in status:
+            print(f"# {ts} \t| {h}:{p}/{proto} \t= {status}{line_note}")
+        # Count only confirmed open (avoid UDP "open|filtered")
+        if status == "open":
             results.append(dict(host=h, port=p, proto=proto, status=status, note=note, time=ts))
     return results
 
 async def resolve_host(label: str) -> str:
     """
     Resolve a hostname to an IP address.
-    Uses getaddrinfo to prefer IPv4 then IPv6. If resolution fails, return input label unchanged.
-    The resolved address is used for low-level scans.
+    Prefer IPv4 then IPv6. If resolution fails, return input label unchanged.
     """
     try:
         infos = await asyncio.get_running_loop().getaddrinfo(label, None, type=socket.SOCK_STREAM)
-        # Prefer IPv4 results first for stable output.
         for fam in (socket.AF_INET, socket.AF_INET6):
             for af, _socktype, _proto, _canon, sa in infos:
                 if af == fam:
@@ -334,10 +366,12 @@ def main():
     - Dump CSV/JSON files for open results
     """
     p = argparse.ArgumentParser(description="Async port scanner with asyncio + Scapy")
-    p.add_argument("--targets", required=False, default=DEFAULTS["HOST"],help="Host/IP/CIDR or a file with one target per line")
+    p.add_argument("--targets", required=False, default=DEFAULTS["HOST"],
+                   help="Host/IP/CIDR or a file with one target per line")
     p.add_argument("--start", type=int, default=DEFAULTS["START"], help="Start port")
     p.add_argument("--end", type=int, default=DEFAULTS["END"], help="End port")
-    p.add_argument("--ports", default=DEFAULTS["PORTS"],help="Comma list and ranges, e.g. 22,80,8000-8100 (overrides start/end)")
+    p.add_argument("--ports", default=DEFAULTS["PORTS"],
+                   help="Comma list and ranges, e.g. 22,80,8000-8100 (overrides start/end)")
     p.add_argument("-c", "--concurrency", type=int, default=DEFAULTS["CONCURRENCY"], help="Per-host concurrency")
     p.add_argument("--timeout", type=float, default=DEFAULTS["TIMEOUT"], help="Timeout seconds")
     p.add_argument("--csv", help="Write open results to CSV")
@@ -346,6 +380,10 @@ def main():
     p.add_argument("--shuffle", action="store_true", help="Randomise port order")
     p.add_argument("--banner", action="store_true", help="Grab small banner on TCP connect")
     p.add_argument("--rate", type=int, default=DEFAULTS["RATE"], help="Ops per second (0 = unlimited)")
+    p.add_argument("--retries", type=int, default=1, help="Retries for SYN/UDP probes")
+    p.add_argument("--retry-backoff", type=float, default=0.2, help="Seconds; multiplied by attempt number")
+    p.add_argument("--udp-probe", choices=["empty", "dns", "ntp"], default="empty",
+                   help="UDP payload strategy: empty packet, DNS query (53), or NTP request (123)")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--syn", action="store_true", help="SYN scan (root + scapy)")
     mode.add_argument("--udp", action="store_true", help="UDP scan (root + scapy)")
@@ -375,21 +413,25 @@ def main():
         print("No targets.")
         sys.exit(1)
 
-    print(f"scan start={now_utc()} mode={mode_str} targets={len(targets)} ports={len(ports)} "
-          f"concurrency={args.concurrency} timeout={args.timeout}s rate={args.rate}/s")
+    print ("*** PORT SCANNER MRIB ***\n")
+
+    print(f"SCAN start={now_utc()} mode={mode_str} targets={len(targets)} ports={len(ports)} "
+          f"concurrency={args.concurrency} timeout={args.timeout}s rate={args.rate}/s  \n")
 
     try:
         all_results = []
-        # Use a fresh event loop for synchronous-style sequential per-target processing.
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         for t in targets:
-            # Resolve target to numeric IP for scanning
             resolved = loop.run_until_complete(resolve_host(t))
-            print(f"target {t} -> {resolved}")
+            
+            print(f"TARGET {t} -> {resolved}\n")
+
             res = loop.run_until_complete(
                 scan_host(resolved, ports, mode_str, args.timeout, max(1, args.concurrency),
-                          args.show_closed, args.banner, max(0, args.rate))
+                          args.show_closed, args.banner, max(0, args.rate),
+                          udp_probe=args.udp_probe, retries=max(1, args.retries),
+                          backoff=max(0.0, args.retry_backoff))
             )
             all_results.extend(res)
         loop.close()
@@ -397,7 +439,7 @@ def main():
         print("Interrupted.")
         sys.exit(130)
 
-    print(f"scan end={now_utc()} open_found={len(all_results)}")
+    print(f"\n\nSCAN end={now_utc()} open_found={len(all_results)}")
 
     # Persist open results if requested
     if args.csv and all_results:
