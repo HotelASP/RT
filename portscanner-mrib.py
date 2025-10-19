@@ -304,10 +304,9 @@ async def resolve_host(label: str) -> str:
         infos = await asyncio.get_running_loop().getaddrinfo(label, None, type=socket.SOCK_STREAM)
         # Prefer IPv4 results first for stable output.
         for fam in (socket.AF_INET, socket.AF_INET6):
-            for af, *_ in infos:
+            for af, _socktype, _proto, _canon, sa in infos:
                 if af == fam:
-                    addr = infos[0][4][0]
-                    return addr
+                    return sa[0]
         return infos[0][4][0]
     except Exception:
         return label
