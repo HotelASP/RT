@@ -17,7 +17,9 @@
 # python3 portscanner-mrib.py --targets hotelasp.com --ports "21" --banner --csv results.csv --json results.json --pcap results.pcap
 # python3 portscanner-mrib.py --targets hotelasp.com --ports "21,22,53,135,80,443,445,50920-50930" --banner --shuffle --rate 5 --csv results.csv --json results.json --pcap results.pcap
 # python3 portscanner-mrib.py --targets 160.153.248.110 --start 1 --end 65535 --syn --pcap results.pcap --rate 5 --concurrency 10 --csv results.csv --json results.json
-# python3 portscanner-mrib.py --targets 160.153.248.110 --start 1 --end 10 --syn --pcap --csv --json --rate 5 --concurrency 10 
+# python3 portscanner-mrib.py --targets 160.153.248.110 --start 1 --end 65535 --syn --rate 5 --concurrency 10 --csv --json --pcap
+# python3 portscanner-mrib.py --targets 160.153.248.110 --start 1 --end 65535 --udp --dns --ntp --rate 5 --concurrency 10 --csv --json --pcap
+
 
 from __future__ import annotations
 
@@ -394,7 +396,7 @@ def build_udp_payload(dst_port: int, probe_kind: str):
     # - "ntp"   : 48-byte client request (only for port 123)
 
     if probe_kind == "dns" and dst_port == 53:
-        return scapy.DNS(rd=1, qd=scapy.DNSQR(qname="example.com"))
+        return scapy.DNS(rd=1, qd=scapy.DNSQR(qname="google.com"))
 
     if probe_kind == "ntp" and dst_port == 123:
         # LI=0, VN=3, Mode=3 (client): first byte 0x1b followed by zeros to size 48
