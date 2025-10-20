@@ -18,8 +18,7 @@
 # python3 portscanner-mrib.py --targets hotelasp.com --ports "21,22,53,135,80,443,445,50920-50930" --banner --shuffle --rate 5 --csv results.csv --json results.json --pcap results.pcap
 # python3 portscanner-mrib.py --targets 160.153.248.110 --start 1 --end 65535 --syn --pcap results.pcap --rate 5 --concurrency 10 --csv results.csv --json results.json
 # python3 portscanner-mrib.py --targets 160.153.248.110 --start 1 --end 65535 --syn --rate 5 --concurrency 10 --csv --json --pcap
-# python3 portscanner-mrib.py --targets 160.153.248.110 --start 1 --end 65535 --udp --dns --ntp --rate 5 --concurrency 10 --csv --json --pcap
-
+# python3 portscanner-mrib.py --targets hotelasp.com --ports 53 --udp --udp-probe dns --timeout 2 --retries 2 --retry-backoff 0.2 --pcap scan_pcap.pcap --csv scan.csv --json scan.json
 
 from __future__ import annotations
 
