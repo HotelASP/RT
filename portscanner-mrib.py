@@ -1,39 +1,30 @@
 #!/usr/bin/env python3
 # --------------
-#
 # Asynchronous port scanner with three modes:
-#   + PCAP capture option (--pcap)
-#   1) TCP connect scan using asyncio (no root)
-#   2) TCP SYN scan using Scapy (root)
-#   3) UDP probe using Scapy (root)
-# --------------
-# - Targets: single host, CIDR block, or file with one target per line.
-# - Ports: explicit list or ranges. Optional shuffle.
-# - Per-host concurrency and simple rate limiting.
-# - Optional banner grab for TCP connect mode.
-# - CSV/JSON output with only confirmed "open" results (UDP ambiguity preserved).
+#   + Optional PCAP capture (--pcap)
+#   1) TCP connect scan using asyncio (no root required)
+#   2) TCP SYN scan using Scapy (root required)
+#   3) UDP probe using Scapy (root required)
+#
 # -------------- EXAMPLES --------------
-# sudo -i 
+# sudo -i
 # cd /home/kali/Desktop/RT
 #########################################################################################
-### Scan port 21 and get banner and save output using specific names
+# Scan port 21 and get a banner, save output with specific filenames
 # python3 portscanner-mrib.py --targets hotelasp.com --ports "21" --banner --csv results.csv --json results.json --pcap results.pcap
 #########################################################################################
-### Scan specific ports, save results with default names, shuffle port order and limit to 5 scans per sec
-# python3 portscanner-mrib.py --targets 160.153.248.110 --ports "21,22,53,135,80,443,445,50920-50930" --banner --shuffle --rate 5 --csv --json --pcap 
+# Scan specific ports, save default-named outputs, shuffle port order, limit to 5 ops/s
+# python3 portscanner-mrib.py --targets 160.153.248.110 --ports "21,22,53,135,80,443,445,50920-50930" --banner --shuffle --rate 5 --csv --json --pcap
 #########################################################################################
-### https://www.hackthissite.org/ - 137.74.187.102 Scan all ports with the min packets. Calls scan_tcp_syn. Do not wait for SYN-ACK. Limit 10 scans per sec and start 100 parallel concurrency processes
+# Full TCP SYN scan with high concurrency and rate limiting, save everything
 # python3 portscanner-mrib.py --targets hackthissite.org --start 1 --end 65535 --syn --show-closed --rate 10 --concurrency 100 --csv --json --pcap
 #########################################################################################
-### Scan port 53 using UDP. Check for dns port and use specific payload for DNS. If fail retries 2 times and wait 0.2 in the first and 0.4 in the second retry. Timeout set to 2s
+# UDP DNS probe with retries and backoff, write pcap/csv/json auto-named
 # python3 portscanner-mrib.py --targets 8.8.8.8 --ports 53 --udp --udp-probe dns --timeout 2 --retries 2 --retry-backoff 0.2 --pcap --csv --json
 #########################################################################################
-### Scan port 123 using NTP. Check for dns port and use specific payload for NTP. 
+# UDP NTP probe against NIST server, write pcap/csv/json auto-named
 # python3 portscanner-mrib.py --targets 129.6.15.28 --ports 123 --udp --udp-probe ntp --timeout 5 --retries 2 --retry-backoff 0.3 --pcap --csv --json
 #########################################################################################
-
- 
-
 
 from __future__ import annotations
 
@@ -44,27 +35,60 @@ import ipaddress
 import json
 import os
 import random
+import shlex
 import socket
 import sys
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple, Any
 
-
+# BATCH MODE:
+#   Use --test <specfile>. Each non-empty, non-comment line in <specfile> is a
+#   complete CLI spec. Anything before the first '-' option on a line is ignored,
+#   so both:
+#     python3 portscanner-mrib.py --targets host --ports 21 --csv
+#   and:
+#   are valid in the spec file. Lines containing only '#', '-' or spaces are skipped.
+#
+# python3 portscanner-mrib.py --test batch.txt
+## batch.txt
+# --targets hotelasp.com --ports "21" --banner --csv batch-result1.csv --json batch-result1.json --pcap batch-result1.pcap
+# --targets 160.153.248.110 --ports "21,22,53,135,80,443,445,50920-50930" --banner --shuffle --rate 5 --csv batch-result2.csv --json batch-result2.json --pcap batch-result2.pcap
+# --targets hackthissite.org --start 1 --end 65 --syn --show-closed --rate 10 --concurrency 100 --csv batch-result3.csv --json batch-result3.json --pcap batch-result3.pcap
+# --targets 8.8.8.8 --ports 53 --udp --udp-probe dns --timeout 2 --retries 2 --retry-backoff 0.2 --pcap batch-result4.pcap --csv batch-result4.csv --json batch-result4.json
+# --targets 129.6.15.28 --ports 123 --udp --udp-probe ntp --timeout 5 --retries 2 --retry-backoff 0.3 --pcap batch-result5.pcap --csv batch-result5.csv --json batch-result5.json
+#
+# TEST BATTERY:
+#   Use --test-battery <file_of_targets>. Runs a compact suite:
+#     - TCP connect on [21, 22,80,443]
+#     - If scapy+root: TCP SYN on [21, 22,80,443] and UDP DNS on 53
+#   Respects --csv/--json/--pcap persistence.
+#
+# python3 portscanner-mrib.py --test-battery targets.txt --csv bat.csv --json bat.json --pcap bat.pcap
+## targets.txt
+# hotelasp.com
+# hackthissite.org
+# 8.8.8.8
+# 129.6.15.28
 # -----------------------------------------------------------------------------
-# Optional Scapy import
+# Optional Scapy import and runtime hints
+# -----------------------------------------------------------------------------
+# Scapy is only required for --syn and --udp modes, and also for --pcap capture.
+# For best libpcap-based sniffing performance, scapy.conf.use_pcap = True is set
+# if Scapy is importable. If scapy is not available, these modes will be blocked
+# at runtime with a clear error.
 # -----------------------------------------------------------------------------
 
 try:
     import scapy.all as scapy
     from scapy.packet import Raw
-    scapy.conf.use_pcap = True  
-    SCAPY_AVAILABLE = True
+    scapy.conf.use_pcap = True            # Prefer libpcap backend if available
+    SCAPY_AVAILABLE: bool = True
 except Exception:
     SCAPY_AVAILABLE = False
 
 # -----------------------------------------------------------------------------
-# Defaults 
+# Defaults and environment overrides
 # -----------------------------------------------------------------------------
 
 DEFAULTS: Dict[str, object] = {
@@ -73,101 +97,76 @@ DEFAULTS: Dict[str, object] = {
     "END": int(os.environ.get("PORTSCAN_END", "1024")),
     "CONCURRENCY": int(os.environ.get("PORTSCAN_CONCURRENCY", "1")),
     "TIMEOUT": float(os.environ.get("PORTSCAN_TIMEOUT", "1.0")),
-    "RATE": int(os.environ.get("PORTSCAN_RATE", "0")),  # 0 means unlimited
+    "RATE": int(os.environ.get("PORTSCAN_RATE", "0")),  # 0 disables rate limiting
 }
 
 # -----------------------------------------------------------------------------
-# Small utilities
+# Time and formatting helpers
 # -----------------------------------------------------------------------------
 
 def utc_now_str() -> str:
+    # Return current time in UTC formatted for logs.
     now_utc = datetime.now(timezone.utc)
     timestamp = now_utc.strftime("%Y-%m-%d %H:%M:%S")
     return timestamp
 
-def ts_utc() -> str:
+def ts_utc_compact() -> str:
+    # Return a compact timestamp for filenames.
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
-def read_targets_from_file(path: str) -> List[str]:
-    # Read targets from a text file. Return a list with one target per line.
-    #   - Ignore empty lines.
-    #   - Ignore lines starting with '#'.
-    #   - Strip whitespace.
-    
-    targets: List[str] = []
+# -----------------------------------------------------------------------------
+# Target expansion helpers
+# -----------------------------------------------------------------------------
 
-    with open(path, mode="r", encoding="utf-8", errors="ignore") as handle:
+def read_targets_from_file(file_path: str) -> List[str]:
+    # Read targets from a text file. Each non-empty, non-comment line is a target.
+    targets: List[str] = []
+    with open(file_path, mode="r", encoding="utf-8", errors="ignore") as handle:
         for raw_line in handle:
             line = raw_line.strip()
-            if line == "":
+            if not line:
                 continue
             if line.startswith("#"):
                 continue
             targets.append(line)
-
     return targets
 
-
-def expand_cidr(arg: str) -> Optional[List[str]]:
-    # Try to interpret 'arg' as a CIDR. If valid, expand and return all host IPs.
-    # - Uses ipaddress.ip_network(strict=False).
-    # - For IPv4: excludes network and broadcast via .hosts().
-    # - If .hosts() is empty (e.g., /32), return the network address.
-
+def expand_cidr_to_hosts(cidr_or_ip: str) -> Optional[List[str]]:
+    # Expand a CIDR to host IPs. For /32 or a single address, include the address itself.
     try:
-        network = ipaddress.ip_network(arg, strict=False)
+        network = ipaddress.ip_network(cidr_or_ip, strict=False)
     except ValueError:
         return None
+    hosts: List[str] = [str(ip) for ip in network.hosts()]
+    if not hosts:
+        hosts.append(str(network.network_address))
+    return hosts
 
-    host_ips: List[str] = []
+def expand_targets_to_list(target_argument: str) -> List[str]:
+    # Accept a filename, a CIDR, or a single hostname/IP.
+    if os.path.isfile(target_argument):
+        return read_targets_from_file(target_argument)
+    cidr_hosts = expand_cidr_to_hosts(target_argument)
+    if cidr_hosts is not None:
+        return cidr_hosts
+    return [target_argument]
 
-    for ip in network.hosts():
-        host_ips.append(str(ip))
+# -----------------------------------------------------------------------------
+# Port list parsing
+# -----------------------------------------------------------------------------
 
-    if len(host_ips) == 0:
-        host_ips.append(str(network.network_address))
-
-    return host_ips
-
-
-def expand_targets(arg: str) -> List[str]:
-    # Produce a list of targets from:
-    #   - a file path,
-    #   - a CIDR (e.g., '10.0.0.0/24'),
-    #   - a single IP or hostname.
-
-    if os.path.isfile(arg):
-        file_targets = read_targets_from_file(arg)
-        return file_targets
-
-    cidr_targets = expand_cidr(arg)
-    if cidr_targets is not None:
-        return cidr_targets
-
-    return [arg]
-
-
-def parse_ports(start_port: int, end_port: int, spec: Optional[str]) -> List[int]:
-    # Parse a port specification into a sorted list of unique valid ports.
-    # - start_port, end_port: inclusive range used when 'spec' is None.
-    # - spec: string like "22,80,8000-8100".
-    # - Valid range is 1..65535.
-    # - Duplicates removed.
-
+def parse_port_specification(start_port: int, end_port: int, port_spec: Optional[str]) -> List[int]:
+    # Convert a ports specification into a sorted unique list in [1, 65535].
     ports: List[int] = []
-
-    if spec is None:
-        current = start_port
-        while current <= end_port:
-            ports.append(current)
-            current += 1
+    if port_spec is None:
+        # Range [start_port, end_port] inclusive
+        for p in range(start_port, end_port + 1):
+            ports.append(p)
     else:
-        parts = spec.split(",")
-        for raw in parts:
-            token = raw.strip()
-            if token == "":
+        for token in port_spec.split(","):
+            token = token.strip()
+            if not token:
                 continue
-
             if "-" in token:
                 left, right = token.split("-", 1)
                 try:
@@ -175,174 +174,128 @@ def parse_ports(start_port: int, end_port: int, spec: Optional[str]) -> List[int
                     stop = int(right)
                 except ValueError:
                     continue
-
-                current = start
-                while current <= stop:
-                    ports.append(current)
-                    current += 1
+                if start > stop:
+                    start, stop = stop, start
+                for p in range(start, stop + 1):
+                    ports.append(p)
             else:
                 try:
-                    single = int(token)
-                    ports.append(single)
+                    ports.append(int(token))
                 except ValueError:
                     continue
 
-    # Filter invalid, then sort and deduplicate while preserving order.
-    filtered: List[int] = []
+    # Filter invalid and deduplicate then sort
+    valid_sorted_unique: List[int] = []
     seen = set()
-
     for p in ports:
-        if p < 1:
-            continue
-        if p > 65535:
+        if p < 1 or p > 65535:
             continue
         if p in seen:
             continue
         seen.add(p)
-        filtered.append(p)
+        valid_sorted_unique.append(p)
 
-    filtered.sort()
-    return filtered
-
+    valid_sorted_unique.sort()
+    return valid_sorted_unique
 
 # -----------------------------------------------------------------------------
-# DNS/Name resolution
+# Name resolution
 # -----------------------------------------------------------------------------
 
-async def resolve_to_ip(label: str) -> str:
-    # Resolve a hostname to an IP address string.
-    # - Use asyncio.getaddrinfo with type=SOCK_STREAM.
-    # - Prefer IPv4 (AF_INET), then IPv6 (AF_INET6).
-    # - On any failure, return the input label unchanged.
-
+async def resolve_dns_label_to_ip(dns_label: str) -> str:
+    # Resolve a DNS label to an IP string using asyncio.getaddrinfo.
+    # Prefer IPv4 then IPv6. On failure, return the original label.
     try:
         loop = asyncio.get_running_loop()
-        addrinfo = await loop.getaddrinfo(label, None, type=socket.SOCK_STREAM)
+        addrinfo = await loop.getaddrinfo(dns_label, None, type=socket.SOCK_STREAM)
     except Exception:
-        return label
+        return dns_label
 
-    # Prefer IPv4 first, then IPv6
     preferred_families = (socket.AF_INET, socket.AF_INET6)
-
     for family in preferred_families:
         for af, _socktype, _proto, _canon, sockaddr in addrinfo:
             if af == family:
-                ip = sockaddr[0]
-                return ip
-
-    # Fallback to the first entry if ordering is unexpected
-    try:
-        ip = addrinfo[0][4][0]
-        return ip
-    except Exception:
-        return label
-
-
-# -----------------------------------------------------------------------------
-# TCP connect scan (asyncio)
-# -----------------------------------------------------------------------------
-
-async def try_read_banner(reader: asyncio.StreamReader,
-                          timeout_seconds: float,
-                          max_bytes: int = 128) -> str:
-    # Attempt to read up to 'max_bytes' from a connected stream.
-    # - Bounded by 'timeout_seconds'.
-    # - Decoded as UTF-8 with replacement on errors.
-    # - Empty string means no banner or an error.
+                return sockaddr[0]
 
     try:
-        data = await asyncio.wait_for(reader.read(max_bytes), timeout=timeout_seconds)
+        return addrinfo[0][4][0]
+    except Exception:
+        return dns_label
+
+# -----------------------------------------------------------------------------
+# TCP connect scan using asyncio streams
+# -----------------------------------------------------------------------------
+
+async def try_read_small_banner(stream_reader: asyncio.StreamReader,
+                                timeout_seconds: float,
+                                max_bytes: int = 128) -> str:
+    # Try to read a small banner without blocking too long.
+    try:
+        data = await asyncio.wait_for(stream_reader.read(max_bytes), timeout=timeout_seconds)
     except Exception:
         return ""
-
-    if data is None:
+    if not data:
         return ""
+    return data.decode("utf-8", errors="replace").strip()
 
-    text = data.decode("utf-8", errors="replace")
-    text = text.strip()
-    return text
-
-
-async def scan_tcp_connect(host: str,
-                           port: int,
-                           timeout_seconds: float,
-                           banner_enabled: bool) -> Tuple[str, int, str, str, str, int]:
-    # Perform a TCP connect() style scan for one port.
-    # Returns
-    # -------
-    # (host, port, proto, status, note, time)
-    #   - proto  : "tcp"
-    #   - status : "open", "closed", or "filtered"
-    #   - note   : short reason or banner text
-    #   - time : time in milliseconds
-
+async def scan_tcp_connect_once(target_ip: str,
+                                target_port: int,
+                                timeout_seconds: float,
+                                banner_enabled: bool) -> Tuple[str, int, str, str, str, int]:
+    # Perform a single TCP connect probe and optionally read a banner.
     start = time.perf_counter()
     try:
-        open_task = asyncio.open_connection(host=host, port=port)
+        open_task = asyncio.open_connection(host=target_ip, port=target_port)
         reader, writer = await asyncio.wait_for(open_task, timeout=timeout_seconds)
     except asyncio.TimeoutError:
-        dur = int((time.perf_counter() - start) * 1000)
-        return host, port, "tcp", "filtered", "timeout", dur
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        return target_ip, target_port, "tcp", "filtered", "timeout", duration_ms
     except ConnectionRefusedError:
-        dur = int((time.perf_counter() - start) * 1000)
-        return host, port, "tcp", "closed", "ECONNREFUSED", dur
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        return target_ip, target_port, "tcp", "closed", "ECONNREFUSED", duration_ms
     except OSError as os_err:
-        errno = getattr(os_err, "errno", None)
-        dur = int((time.perf_counter() - start) * 1000)
-        if errno in (101, 110, 113):
-            message = os.strerror(errno)
-            return host, port, "tcp", "filtered", message, dur
+        errno_val = getattr(os_err, "errno", None)
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        if errno_val in (101, 110, 113):
+            return target_ip, target_port, "tcp", "filtered", os.strerror(errno_val), duration_ms
         message = getattr(os_err, "strerror", repr(os_err))
-        return host, port, "tcp", "closed", message, dur
+        return target_ip, target_port, "tcp", "closed", message, duration_ms
     except Exception as exc:
-        dur = int((time.perf_counter() - start) * 1000)
-        return host, port, "tcp", "filtered", type(exc).__name__, dur
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        return target_ip, target_port, "tcp", "filtered", type(exc).__name__, duration_ms
 
-    # Connected successfully
     banner_text = ""
     if banner_enabled:
-        small_timeout = min(timeout_seconds, 0.5)
-        banner_text = await try_read_banner(reader, small_timeout, max_bytes=128)
+        banner_timeout = min(timeout_seconds, 0.5)
+        banner_text = await try_read_small_banner(reader, banner_timeout, max_bytes=128)
 
     try:
         writer.close()
-    except Exception:
-        pass
-
-    try:
         await writer.wait_closed()
     except Exception:
         pass
 
-    dur = int((time.perf_counter() - start) * 1000)
-    return host, port, "tcp", "open", banner_text, dur
+    duration_ms = int((time.perf_counter() - start) * 1000)
+    return target_ip, target_port, "tcp", "open", banner_text, duration_ms
 
 # -----------------------------------------------------------------------------
-# TCP SYN scan (Scapy in executor)
+# TCP SYN scan using Scapy (requires root)
 # -----------------------------------------------------------------------------
 
-def scapy_syn_once(dst_ip: str, 
-                   dst_port: int, 
-                   timeout_seconds: float) -> Tuple[str, str]:
-    # Send one TCP SYN and interpret the response.
-    # Responses
-    # ---------
-    # - None           -> "filtered", "no-response"
-    # - SYN+ACK        -> "open"    , "SYN-ACK"    (send RST to avoid full handshake)
-    # - RST            -> "closed"  , "RST"
-    # - Anything else  -> "filtered", "unexpected"
-
+def scapy_send_single_syn(dst_ip: str,
+                          dst_port: int,
+                          timeout_seconds: float) -> Tuple[str, str]:
+    # Send one TCP SYN packet and interpret the response.
+    # Return a tuple (status, note).
     ip_layer = scapy.IP(dst=dst_ip)
     tcp_layer = scapy.TCP(dport=dst_port, flags="S")
-    packet = ip_layer / tcp_layer
+    probe_pkt = ip_layer / tcp_layer
 
-    response = scapy.sr1(packet, timeout=timeout_seconds, verbose=0)
+    response = scapy.sr1(probe_pkt, timeout=timeout_seconds, verbose=0)
 
     if response is None:
         return "filtered", "no-response"
-
-    has_tcp = response.haslayer(scapy.TCP)
-    if not has_tcp:
+    if not response.haslayer(scapy.TCP):
         return "filtered", "unexpected"
 
     flags = response[scapy.TCP].flags
@@ -350,430 +303,352 @@ def scapy_syn_once(dst_ip: str,
     rst_any = ((flags & 0x14) == 0x14) or ((flags & 0x04) == 0x04)
 
     if syn_ack:
-        # Politely abort handshake to avoid leaving half-open connections
-        rst_packet = scapy.IP(dst=dst_ip) / scapy.TCP(dport=dst_port, flags="R")
-        scapy.send(rst_packet, verbose=0)
+        # Send a RST to avoid completing the handshake
+        rst_pkt = scapy.IP(dst=dst_ip) / scapy.TCP(dport=dst_port, flags="R")
+        scapy.send(rst_pkt, verbose=0)
         return "open", "SYN-ACK"
-
     if rst_any:
         return "closed", "RST"
-
     return "filtered", "unexpected"
 
-
-
-async def scan_tcp_syn(host: str,
-                       port: int,
-                       timeout_seconds: float,
-                       retries: int,
-                       backoff_seconds: float) -> Tuple[str, int, str, str, str, int]:
-    # Run a TCP SYN probe in a thread executor with simple retry logic.
-    # Retries
-    # -------
-    # - Retries only on exceptions in the executor call.
-    # - Linear backoff: wait 'backoff_seconds * attempt' between attempts.
+async def scan_tcp_syn_once(target_ip: str,
+                            target_port: int,
+                            timeout_seconds: float,
+                            retries: int,
+                            backoff_seconds: float) -> Tuple[str, int, str, str, str, int]:
+    # Perform a TCP SYN probe with retries run in a thread executor.
     loop = asyncio.get_running_loop()
-    attempt = 1
-    last_error = ""
-    start_total = time.perf_counter()
-    while attempt <= max(1, retries):
+    attempt_index = 1
+    last_error_note = ""
+    scan_start = time.perf_counter()
+
+    while attempt_index <= max(1, retries):
         try:
-            # measure executor call only (keeps timing simple and consistent)
-            call_start = time.perf_counter()
             status, note = await loop.run_in_executor(
                 None,
-                scapy_syn_once,
-                host,
-                port,
+                scapy_send_single_syn,
+                target_ip,
+                target_port,
                 timeout_seconds
             )
-            dur = int((time.perf_counter() - start_total) * 1000)
-            return host, port, "tcp", status, note, dur
+            duration_ms = int((time.perf_counter() - scan_start) * 1000)
+            return target_ip, target_port, "tcp", status, note, duration_ms
         except Exception as exc:
-            last_error = type(exc).__name__
-        if attempt < retries:
-            await asyncio.sleep(backoff_seconds * attempt)
-        attempt += 1
-    dur = int((time.perf_counter() - start_total) * 1000)
-    return host, port, "tcp", "filtered", last_error or "error", dur
+            last_error_note = type(exc).__name__
+        if attempt_index < retries:
+            await asyncio.sleep(backoff_seconds * attempt_index)
+        attempt_index += 1
 
+    duration_ms = int((time.perf_counter() - scan_start) * 1000)
+    return target_ip, target_port, "tcp", "filtered", last_error_note or "error", duration_ms
 
 # -----------------------------------------------------------------------------
-# UDP scan (Scapy in executor)
+# UDP scan using Scapy (requires root)
 # -----------------------------------------------------------------------------
 
-def build_udp_payload_v1(dst_port: int, probe_kind: str):
-    # Build optional UDP payload for protocol-aware probing.
-    # Options
-    # -------
-    # - "empty" : no payload
-    # - "dns"   : standard A query for 'example.com' (only for port 53)
-    # - "ntp"   : 48-byte client request (only for port 123)
-
-    if probe_kind == "dns" and dst_port == 53:
-        return scapy.DNS(rd=1, qd=scapy.DNSQR(qname="google.com"))
-
-    # if probe_kind == "ntp" and dst_port == 123:
-    #     # LI=0, VN=3, Mode=3 (client): first byte 0x1b followed by zeros to size 48
-    #     payload_bytes = b"\x1b" + (b"\x00" * 47)
-    #     return Raw(payload_bytes)
-
-    if probe_kind == "ntp" and dst_port == 123:
-        # LI=0, VN=4, Mode=3 -> 0x23, plus current transmit timestamp (sec, frac)
-        from scapy.packet import Raw
-        import struct, time
-        NTP_EPOCH = 2208988800  # 1900->1970
-        now = time.time() + NTP_EPOCH
-        sec = int(now)
-        frac = int((now - sec) * (1 << 32)) & 0xFFFFFFFF
-        first_byte = bytes([0x23])  # 0b0010_0011
-        # bytes 1..39 zero; bytes 40..47 = transmit timestamp
-        payload = first_byte + b"\x00"*39 + struct.pack("!II", sec, frac)
-        return Raw(payload)
-
-    return None
-
-def build_udp_payload_v2(dst_port: int, probe_kind: str):
+def build_udp_probe_payload(dst_port: int, probe_kind: str):
+    # Create an application-aware UDP payload when possible.
+    # "empty" -> None payload
+    # "dns"   -> standard query for A record of google.com on port 53
+    # "ntp"   -> client request with VN=4 and a transmit timestamp on port 123
     if probe_kind == "dns" and dst_port == 53:
         return scapy.DNS(rd=1, qd=scapy.DNSQR(qname="google.com"))
     if probe_kind == "ntp" and dst_port == 123:
-        import struct, time
+        import struct
         NTP_EPOCH = 2208988800
         now = time.time() + NTP_EPOCH
         sec = int(now)
         frac = int((now - sec) * (1 << 32)) & 0xFFFFFFFF
-        first = bytes([0x23])  # LI=0, VN=4, Mode=3
+        first = bytes([0x23])  # LI=0, VN=4, Mode=3 (client)
         return Raw(first + b"\x00"*39 + struct.pack("!II", sec, frac))
     return None
 
-def scapy_udp_once_v1(dst_ip: str,
-                   dst_port: int,
-                   timeout_seconds: float,
-                   probe_kind: str) -> Tuple[str, str]:
-    # Send one UDP probe and interpret the response.
-    # Responses
-    # ---------
-    # - ICMP type=3 code=3   -> "closed", "icmp-port-unreachable"
-    # - UDP/DNS application  -> "open"   , "udp-reply"/"dns-reply"
-    # - No response          -> "open|filtered", "no-response" (ambiguous)
-    # - Other ICMP           -> "filtered", "icmp type=X code=Y"
+def scapy_udp_probe_sniff_once(dst_ip: str,
+                               dst_port: int,
+                               timeout_seconds: float,
+                               probe_kind: str) -> Tuple[str, str]:
+    # Send one UDP probe and sniff a matching reply using a BPF filter.
+    payload = build_udp_probe_payload(dst_port, probe_kind)
 
-    payload = build_udp_payload_v1(dst_port, probe_kind)
-
-    ip_layer = scapy.IP(dst=dst_ip)
-    #udp_layer = scapy.UDP(dport=dst_port)
-    udp_layer = scapy.UDP(sport=scapy.RandShort(), dport=dst_port)
-
-    if payload is None:
-        packet = ip_layer / udp_layer
-    else:
-        packet = ip_layer / udp_layer / payload
-
-    response = scapy.sr1(packet, timeout=timeout_seconds, verbose=0)
-
-    if response is None:
-        return "open|filtered", "no-response"
-
-    if response.haslayer(scapy.ICMP):
-        icmp = response[scapy.ICMP]
-        if icmp.type == 3 and icmp.code == 3:
-            return "closed", "icmp-port-unreachable"
-
-        message = f"icmp type={icmp.type} code={icmp.code}"
-        return "filtered", message
-
-    # Application-level checks
-    if probe_kind == "dns" and response.haslayer(scapy.DNS):
-        return "open", "dns-reply"
-
-    has_udp = response.haslayer(scapy.UDP)
-    if has_udp:
-        udp_payload_len = len(bytes(response[scapy.UDP].payload))
-        if udp_payload_len > 0:
-            return "open", "udp-reply"
-
-    return "open|filtered", "unexpected"
-
-
-def scapy_udp_once_v2(dst_ip: str, dst_port: int, timeout_seconds: float, probe_kind: str):
-    payload = build_udp_payload_v2(dst_port, probe_kind)
-
+    # Choose egress interface as Scapy would route the packet
     try:
-        iface = scapy.conf.route.route(dst_ip)[0]
+        iface_name = scapy.conf.route.route(dst_ip)[0]
     except Exception:
-        iface = scapy.conf.iface
+        iface_name = scapy.conf.iface
 
-    sport = int(scapy.RandShort())
-    pkt = scapy.IP(dst=dst_ip, ttl=64) / scapy.UDP(sport=sport, dport=dst_port) / (payload or b"")
+    src_port = int(scapy.RandShort())
+    ip_layer = scapy.IP(dst=dst_ip, ttl=64)
+    udp_layer = scapy.UDP(sport=src_port, dport=dst_port)
+    probe_pkt = ip_layer / udp_layer / (payload or b"")
 
-    bpf = f"udp and src host {dst_ip} and src port {dst_port} and dst port {sport}"
+    # Only capture the real answer back to our ephemeral src_port
+    bpf_filter = f"udp and src host {dst_ip} and src port {dst_port} and dst port {src_port}"
 
-    sniffer = scapy.AsyncSniffer(filter=bpf, iface=iface, store=True, promisc=True)
+    # Arm a sniffer before sending to avoid race conditions
+    sniffer = scapy.AsyncSniffer(filter=bpf_filter, iface=iface_name, store=True, promisc=True)
     sniffer.start()
-    time.sleep(0.02)               # dá tempo ao sniffer para armar
-    scapy.send(pkt, verbose=0)     # só agora envia
+    time.sleep(0.02)                      # give the sniffer time to arm
+    scapy.send(probe_pkt, verbose=0)      # now send the probe
     sniffer.join(timeout_seconds)
-    pkts = sniffer.stop()
+    captured_pkts = sniffer.stop()
 
-    if not pkts:
+    if not captured_pkts:
         return "open|filtered", "no-response"
 
-    resp = pkts[0]
+    resp = captured_pkts[0]
+
+    # ICMP interpretation path if any slips through the BPF (rare with filter)
     if resp.haslayer(scapy.ICMP):
         icmp = resp[scapy.ICMP]
         if icmp.type == 3 and icmp.code == 3:
             return "closed", "icmp-port-unreachable"
         return "filtered", f"icmp type={icmp.type} code={icmp.code}"
 
+    # UDP path with possible application payload
     if resp.haslayer(scapy.UDP) and resp[scapy.IP].src == dst_ip and resp[scapy.UDP].sport == dst_port:
         if probe_kind == "dns" and resp.haslayer(scapy.DNS):
             return "open", "dns-reply"
-        raw = bytes(resp[scapy.UDP].payload)
-        first = raw[0] if raw else None
-        return "open", (f"udp-reply first=0x{first:02x}" if first is not None else "udp-reply")
+        raw_payload = bytes(resp[scapy.UDP].payload)
+        if raw_payload:
+            first = raw_payload[0]
+            return "open", f"udp-reply first=0x{first:02x}"
+        return "open", "udp-reply"
 
     return "filtered", "unexpected-src-or-proto"
 
-
-async def scan_udp(host: str,
-                   port: int,
-                   timeout_seconds: float,
-                   probe_kind: str,
-                   retries: int,
-                   backoff_seconds: float) -> Tuple[str, int, str, str, str, int]:
-    # Run a UDP probe in a thread executor with simple retry logic.
-    # UDP is often ambiguous. Many services do not respond to empty probes.
+async def scan_udp_once(target_ip: str,
+                        target_port: int,
+                        timeout_seconds: float,
+                        probe_kind: str,
+                        retries: int,
+                        backoff_seconds: float) -> Tuple[str, int, str, str, str, int]:
+    # Perform a UDP probe with retries run in a thread executor.
     loop = asyncio.get_running_loop()
-    attempt = 1
-    last_error = ""
-    start_total = time.perf_counter()
-    while attempt <= max(1, retries):
+    attempt_index = 1
+    last_error_note = ""
+    scan_start = time.perf_counter()
+
+    while attempt_index <= max(1, retries):
         try:
             status, note = await loop.run_in_executor(
                 None,
-                scapy_udp_once_v2,
-                host,
-                port,
+                scapy_udp_probe_sniff_once,
+                target_ip,
+                target_port,
                 timeout_seconds,
                 probe_kind
             )
-            dur = int((time.perf_counter() - start_total) * 1000)
-            return host, port, "udp", status, note, dur
+            duration_ms = int((time.perf_counter() - scan_start) * 1000)
+            return target_ip, target_port, "udp", status, note, duration_ms
         except Exception as exc:
-            last_error = type(exc).__name__
-        if attempt < retries:
-            await asyncio.sleep(backoff_seconds * attempt)
-        attempt += 1
-    dur = int((time.perf_counter() - start_total) * 1000)
-    return host, port, "udp", "filtered", last_error or "error", dur
+            last_error_note = type(exc).__name__
+        if attempt_index < retries:
+            await asyncio.sleep(backoff_seconds * attempt_index)
+        attempt_index += 1
 
+    duration_ms = int((time.perf_counter() - scan_start) * 1000)
+    return target_ip, target_port, "udp", "filtered", last_error_note or "error", duration_ms
 
 # -----------------------------------------------------------------------------
-# Simple fixed-interval rate limiter
+# Fixed-rate limiter for per-host operation pacing
 # -----------------------------------------------------------------------------
 
 class FixedRateLimiter:
-    # Enforce a minimum interval between operations.
-    # rate_ops_per_sec : int
-    #     Operations per second. If <= 0, rate limiting is disabled.
-    # - Uses a single asyncio.Lock to serialize timestamp updates.
-    # - Intended to be used per host to avoid bursts.
-
+    # Enforce a minimum interval between operations when rate > 0.
     def __init__(self, rate_ops_per_sec: int) -> None:
-        self.rate = rate_ops_per_sec
-        self._interval = 0.0
+        self.rate = max(0, rate_ops_per_sec)
+        self._interval = 0.0 if self.rate <= 0 else 1.0 / float(self.rate)
         self._last_time = 0.0
         self._lock = asyncio.Lock()
 
-        if self.rate > 0:
-            self._interval = 1.0 / float(self.rate)
-
     async def wait(self) -> None:
-        # Sleep if needed so the time since the last operation
-        # is at least 'self._interval'.
-
+        # Sleep to keep at most "rate" operations per second.
         if self.rate <= 0:
             return
-
         async with self._lock:
             now = time.perf_counter()
             elapsed = now - self._last_time
             remaining = self._interval - elapsed
-
             if remaining > 0.0:
                 await asyncio.sleep(remaining)
                 self._last_time = time.perf_counter()
             else:
                 self._last_time = now
 
-
 # -----------------------------------------------------------------------------
-# Orchestrate a host scan
+# Per-host orchestration: run probes, print progress, collect results
 # -----------------------------------------------------------------------------
 
-async def scan_host_ports(host_ip: str,
-                          ports: List[int],
-                          mode: str,
-                          timeout_seconds: float,
-                          max_concurrency: int,
-                          show_closed: bool,
-                          banner_enabled: bool,
-                          ops_per_sec: int,
-                          udp_probe_kind: str,
-                          retries: int,
-                          backoff_seconds: float) -> List[Dict[str, object]]:
-    # Scan all ports for a single host based on the chosen mode.
-    # Returns
-    # -------
-    # List[Dict[str, object]]
-    #     Only confirmed "open" results are returned in this list.
-    #     Each item contains: host, port, proto, status, note, time.
+async def scan_all_selected_ports_for_host(target_ip: str,
+                                           selected_ports: List[int],
+                                           selected_mode: str,
+                                           timeout_seconds: float,
+                                           max_concurrency: int,
+                                           show_closed_in_output: bool,
+                                           banner_enabled: bool,
+                                           per_host_ops_per_sec: int,
+                                           udp_probe_kind: str,
+                                           retries: int,
+                                           backoff_seconds: float) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
+    # Scan all selected ports for a single host.
+    # Return a tuple (confirmed_open_results, all_results_for_host).
+    # Printing behavior:
+    #   - Always print "non-closed" events.
+    #   - If show_closed_in_output is True, also print "closed".
+    # Persistence behavior is handled by the caller based on the same flag.
 
-    semaphore = asyncio.Semaphore(max_concurrency)
+    semaphore = asyncio.Semaphore(max(1, max_concurrency))
+    limiter = FixedRateLimiter(per_host_ops_per_sec)
 
-    limiter = FixedRateLimiter(ops_per_sec)
-    
-    confirmed_open: List[Dict[str, object]] = []
+    confirmed_open_results: List[Dict[str, object]] = []
+    all_results_for_host: List[Dict[str, object]] = []
 
-    async def run_one_port(port: int) -> Tuple[str, int, str, str, str]:
-        #Dispatch one port scan according to 'mode'.
-
+    async def run_one_port_probe(port_number: int) -> Tuple[str, int, str, str, str, int]:
+        # Dispatch a single probe according to the selected mode.
         await limiter.wait()
-
         async with semaphore:
-            if mode == "connect":
-                result = await scan_tcp_connect(
-                    host=host_ip,
-                    port=port,
-                    timeout_seconds=timeout_seconds,
-                    banner_enabled=banner_enabled
+            if selected_mode == "connect":
+                return await scan_tcp_connect_once(
+                    target_ip,
+                    port_number,
+                    timeout_seconds,
+                    banner_enabled
                 )
-                return result
-
-            if mode == "syn":
-                result = await scan_tcp_syn(
-                    host=host_ip,
-                    port=port,
-                    timeout_seconds=timeout_seconds,
-                    retries=retries,
-                    backoff_seconds=backoff_seconds
+            if selected_mode == "syn":
+                return await scan_tcp_syn_once(
+                    target_ip,
+                    port_number,
+                    timeout_seconds,
+                    retries,
+                    backoff_seconds
                 )
-                return result
-
-            if mode == "udp":
-                result = await scan_udp(
-                    host=host_ip,
-                    port=port,
-                    timeout_seconds=timeout_seconds,
-                    probe_kind=udp_probe_kind,
-                    retries=retries,
-                    backoff_seconds=backoff_seconds
+            if selected_mode == "udp":
+                return await scan_udp_once(
+                    target_ip,
+                    port_number,
+                    timeout_seconds,
+                    udp_probe_kind,
+                    retries,
+                    backoff_seconds
                 )
-                return result
+            return target_ip, port_number, "tcp", "error", "unknown-mode", 0
 
-            return host_ip, port, "tcp", "error", "unknown-mode"
+    tasks: List[asyncio.Task] = [asyncio.create_task(run_one_port_probe(p)) for p in selected_ports]
 
-    # Schedule all tasks. Concurrency is managed by the semaphore.
-    tasks: List[asyncio.Task] = []
-    for p in ports:
-        task = asyncio.create_task(run_one_port(p))        
-        tasks.append(task)
-
-    # Stream results as they complete.
     for finished in asyncio.as_completed(tasks):
         host, port, proto, status, note, duration_ms = await finished
         timestamp = utc_now_str()
 
-        # Print all non-closed or print closed if requested.
-        should_print = (status != "closed") or show_closed
-        duration_tag = f" [{duration_ms}ms]"
+        # Decide whether to print this line based on --show-closed
+        # We print all results when show_closed_in_output is True
+        # Otherwise, print everything except "closed"
+        should_print = show_closed_in_output or (status != "closed")
         if should_print:
-            if note:
-                print(f"# {timestamp}\t| {host}:{port}/{proto}\t= {status} {note}{duration_tag}")
-            else:
-                print(f"# {timestamp}\t| {host}:{port}/{proto}\t= {status}{duration_tag}")
+            note_suffix = f" {note}" if note else ""
+            print(f"# {timestamp}\t| {host}:{port}/{proto}\t= {status}{note_suffix} [{duration_ms}ms]")
 
-        # Only record confirmed "open" results.
+        # Persist a record for "all results"
+        record: Dict[str, object] = {
+            "host": host,
+            "port": port,
+            "proto": proto,
+            "status": status,
+            "note": note,
+            "time": timestamp,
+            "duration_ms": duration_ms,
+        }
+        all_results_for_host.append(record)
+
+        # Persist a record for "confirmed open results" only when status == "open"
         if status == "open":
-            record: Dict[str, object] = {
-                "host": host,
-                "port": port,
-                "proto": proto,
-                "status": status,
-                "note": note,
-                "time": timestamp,
-                "duration_ms": duration_ms,
-            }
-            confirmed_open.append(record)
+            confirmed_open_results.append(record)
 
-
-
-    return confirmed_open
-
+    return confirmed_open_results, all_results_for_host
 
 # -----------------------------------------------------------------------------
-# Preconditions for Scapy modes
+# Preconditions for Scapy-required modes
 # -----------------------------------------------------------------------------
 
-def ensure_prerequisites_for_scapy(mode: str) -> None:
-    # Validate that Scapy is available and we have root privileges
-    # when mode requires raw sockets ("syn" or "udp").
-    # Exits with status 2 on failure.
-
-    if mode not in ("syn", "udp"):
+def ensure_prerequisites_for_scapy(selected_mode: str) -> None:
+    # Enforce Scapy availability and root privileges when required.
+    if selected_mode not in ("syn", "udp"):
         return
-
     if not SCAPY_AVAILABLE:
         print("Scapy not available. Install with: pip install scapy")
         sys.exit(2)
-
-    # On Unix-like systems, geteuid exists. On Windows it does not.
     try:
         euid = os.geteuid()
     except AttributeError:
-        # Cannot verify. Provide a warning and continue. Raw sockets may fail.
         print("Warning: cannot verify root privileges on this OS. SYN/UDP may fail.")
         return
-
     if euid != 0:
         print("Root privileges required for --syn or --udp. Rerun with sudo.")
         sys.exit(2)
 
-
 # -----------------------------------------------------------------------------
-# PCAP sniffer helpers (Scapy AsyncSniffer)
+# PCAP helpers
 # -----------------------------------------------------------------------------
 
-def start_pcap_sniffer(filter_expr: Optional[str] = None) -> Any:
-    # Starts a Scapy AsyncSniffer and returns it. Returns None on failure.
+def start_pcap_sniffer_for_host(filter_expression: Optional[str] = None) -> Any:
+    # Start a Scapy AsyncSniffer with an optional BPF filter. Return the sniffer or None.
     if not SCAPY_AVAILABLE:
         return None
     try:
-        sniffer = scapy.AsyncSniffer(filter=filter_expr)
+        sniffer = scapy.AsyncSniffer(filter=filter_expression)
         sniffer.start()
         return sniffer
     except Exception:
         return None
 
-
-def stop_and_write_sniffer(sniffer: Any, filename: str) -> None:
-    # Stops sniffer and writes captured packets to filename using wrpcap.
+def stop_sniffer_and_write_pcap(sniffer: Any, pcap_filename: str) -> None:
+    # Stop the sniffer and write packets to a PCAP file.
     if sniffer is None:
         return
     try:
-        packets = sniffer.stop()
-        scapy.wrpcap(filename, packets if packets else [])
+        captured_packets = sniffer.stop()
+        scapy.wrpcap(pcap_filename, captured_packets if captured_packets else [])
     except Exception as exc:
-        print(f"Failed to write pcap {filename}: {type(exc).__name__}")
-
+        print(f"Failed to write pcap {pcap_filename}: {type(exc).__name__}")
 
 # -----------------------------------------------------------------------------
-# CLI and main program
+# CSV and JSON writers
 # -----------------------------------------------------------------------------
 
-def build_arg_parser() -> argparse.ArgumentParser:
-   # Build and return the CLI argument parser.
+def write_results_to_csv(csv_path: str, result_rows: List[Dict[str, object]]) -> None:
+    # Write result rows to CSV with a fixed header.
+    try:
+        with open(csv_path, mode="w", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["host", "port", "proto", "status", "note", "time_utc", "duration_ms"])
+            for rec in result_rows:
+                writer.writerow([
+                    rec.get("host", ""),
+                    rec.get("port", ""),
+                    rec.get("proto", ""),
+                    rec.get("status", ""),
+                    rec.get("note", ""),
+                    rec.get("time", ""),
+                    rec.get("duration_ms", ""),
+                ])
+        print(f"csv -> {csv_path}")
+    except Exception as exc:
+        print(f"Failed to write CSV: {type(exc).__name__}")
 
+def write_results_to_json(json_path: str, result_rows: List[Dict[str, object]]) -> None:
+    # Write result rows to a JSON file, pretty printed.
+    try:
+        with open(json_path, mode="w") as fh:
+            json.dump(result_rows, fh, indent=2)
+        print(f"json -> {json_path}")
+    except Exception as exc:
+        print(f"Failed to write JSON: {type(exc).__name__}")
+
+# -----------------------------------------------------------------------------
+# CLI builder
+# -----------------------------------------------------------------------------
+
+def build_cli_parser() -> argparse.ArgumentParser:
+    # Build and return the CLI argument parser with descriptive help.
     parser = argparse.ArgumentParser(
         description="Readable async port scanner (asyncio + optional Scapy)"
     )
@@ -782,261 +657,258 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--targets",
         required=False,
         default=str(DEFAULTS["HOST"]),
-        help="Host/IP/CIDR or a file with one target per line",
+        help="Host/IP/CIDR or a file with one target per line."
     )
 
     parser.add_argument(
         "--start",
         type=int,
         default=int(DEFAULTS["START"]),
-        help="Start port (inclusive)",
+        help="Start port (inclusive)."
     )
 
     parser.add_argument(
         "--end",
         type=int,
         default=int(DEFAULTS["END"]),
-        help="End port (inclusive)",
+        help="End port (inclusive)."
     )
 
     parser.add_argument(
         "--ports",
-        help="Comma list and ranges, e.g. 22,80,8000-8100 (overrides start/end)",
+        help="Explicit list and ranges, e.g. 22,80,8000-8100 (overrides start/end)."
     )
 
     parser.add_argument(
-        "-c",
-        "--concurrency",
+        "-c", "--concurrency",
         type=int,
         default=int(DEFAULTS["CONCURRENCY"]),
-        help="Per-host concurrency",
+        help="Per-host concurrency."
     )
 
     parser.add_argument(
         "--timeout",
         type=float,
         default=float(DEFAULTS["TIMEOUT"]),
-        help="Timeout seconds",
+        help="Socket and probe timeout in seconds."
     )
 
     parser.add_argument(
         "--csv",
-        nargs="?",                 # allow optional value
-        const="AUTO",              # if provided without value -> AUTO
-        help="Write confirmed-open results to CSV file. If no filename is given, an auto timestamped one is used.",
+        nargs="?",
+        const="AUTO",
+        help="Write results to CSV. If no filename is given, an auto timestamped one is used."
     )
 
     parser.add_argument(
         "--json",
         nargs="?",
         const="AUTO",
-        help="Write confirmed-open results to JSON file. If no filename is given, an auto timestamped one is used.",
+        help="Write results to JSON. If no filename is given, an auto timestamped one is used."
     )
 
     parser.add_argument(
         "--show-closed",
         action="store_true",
-        help="Also print closed ports",
+        help="Also print CLOSED results and persist ALL results to CSV/JSON."
     )
 
     parser.add_argument(
         "--shuffle",
         action="store_true",
-        help="Randomise port order before scanning",
+        help="Randomize port order before scanning."
     )
 
     parser.add_argument(
         "--banner",
         action="store_true",
-        help="Grab a small banner on TCP connect",
+        help="Attempt to grab a small banner on TCP connect mode."
     )
 
     parser.add_argument(
         "--rate",
         type=int,
         default=int(DEFAULTS["RATE"]),
-        help="Ops per second per host (0 = unlimited)",
+        help="Ops per second per host (0 = unlimited)."
     )
 
     parser.add_argument(
         "--retries",
         type=int,
         default=1,
-        help="Retries for SYN/UDP probes",
+        help="Retries for SYN/UDP probes."
     )
 
     parser.add_argument(
         "--retry-backoff",
         type=float,
         default=0.2,
-        help="Seconds; multiplied by attempt number",
+        help="Backoff seconds multiplied by attempt number."
     )
 
     parser.add_argument(
         "--udp-probe",
         choices=["empty", "dns", "ntp"],
         default="empty",
-        help="UDP payload strategy",
+        help="UDP payload strategy for application-aware probing."
     )
 
     parser.add_argument(
         "--pcap",
         nargs="?",
         const="AUTO",
-        help=("Write packet capture(s) to pcap file. If a single target and no filename is given, "
-              "an auto timestamped file is used. With multiple targets, writes <base>.<ip>.pcap."),
+        help="Write packet captures to pcap file. With multiple targets, writes <base>.<ip>.pcap."
     )
 
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument(
         "--syn",
         action="store_true",
-        help="SYN scan (root + scapy)",
+        help="TCP SYN scan (root + scapy)."
     )
     mode_group.add_argument(
         "--udp",
         action="store_true",
-        help="UDP scan (root + scapy)",
+        help="UDP probe (root + scapy)."
     )
+
+    # ----------------- NEW: Batch and Test Battery -----------------
+    parser.add_argument(
+        "--test",
+        metavar="SPECFILE",
+        help="Batch mode. SPECFILE has one full CLI spec per non-comment line. Prefix before first '-' is ignored."
+    )
+    parser.add_argument(
+        "--test-battery",
+        metavar="TARGETS_FILE",
+        dest="test_battery",
+        help="Run a compact test battery against targets listed in TARGETS_FILE."
+    )
+    # ---------------------------------------------------------------
 
     return parser
 
+# -----------------------------------------------------------------------------
+# Helpers to run a full scan using parsed args (single run)
+# -----------------------------------------------------------------------------
 
-def main() -> None:
-    # Entry point:
-    #   1) Parse arguments.
-    #   2) Determine ports and targets.
-    #   3) Validate mode prerequisites.
-    #   4) Resolve each target, run scan, aggregate results.
-    #   5) Persist confirmed-open results if requested.
-
-    parser = build_arg_parser()
-    args = parser.parse_args()
-
-    #TEST ARGS
-    #args.targets='137.74.187.102'; args.ports="123"; args.syn=False; args.udp=False; args.udp_probe='empty'; args.rate=0; args.retries=1; args.retry_backoff=0.2; timeout=1.0; args.start=1; args.end=1024; args.concurrency=1; show_closed=False; shuffle=False; args.banner=False; csv=None; json=None; args.pcap=None; 
-    #args.targets='129.6.15.28'; args.ports='123'; args.syn=False; args.udp=True; args.udp_probe='ntp'; args.rate=0; args.retries=2; args.retry_backoff=0.3; timeout=5.0; args.start=1; args.end=1024; args.concurrency=1; show_closed=False; shuffle=False; args.banner=False; csv=''; json=''; args.pcap=''; 
-    #args.targets='8.8.8.8'; args.ports='53'; args.syn=False; args.udp=True; args.udp_probe='dns'; args.rate=0; args.retries=1; args.retry_backoff=0.2; timeout=1.0; args.start=1; args.end=1024; args.concurrency=1; show_closed=False; shuffle=False; args.banner=False; csv=''; json=''; args.pcap=''; 
-
-    # Ports
-    ports = parse_ports(args.start, args.end, args.ports)
-    if len(ports) == 0:
+def run_full_scan(parsed_args: argparse.Namespace) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
+    """
+    Execute a complete scan flow based on parsed args.
+    Returns (aggregate_confirmed_open, aggregate_all_results).
+    """
+    # Compute selected ports
+    selected_ports = parse_port_specification(parsed_args.start, parsed_args.end, parsed_args.ports)
+    if not selected_ports:
         print("No ports selected.")
         sys.exit(1)
+    if parsed_args.shuffle:
+        random.shuffle(selected_ports)
 
-    if args.shuffle:
-        random.shuffle(ports)
+    # Decide scan mode
+    selected_mode = "connect"
+    if parsed_args.syn:
+        selected_mode = "syn"
+    if parsed_args.udp:
+        selected_mode = "udp"
 
-    # Mode
-    mode = "connect"
-    if args.syn:
-        mode = "syn"
-    if args.udp:
-        mode = "udp"
+    # PCAP implies Scapy is needed to capture packets
+    if getattr(parsed_args, "pcap", None) and not SCAPY_AVAILABLE:
+        print("Scapy required for --pcap. Install with: pip install scapy")
+        sys.exit(2)
 
-    # If PCAP requested, require Scapy as well.
-    if getattr(args, "pcap", None):
-        if not SCAPY_AVAILABLE:
-            print("Scapy required for --pcap. Install with: pip install scapy")
-            sys.exit(2)
+    # Enforce prerequisites for Scapy modes
+    ensure_prerequisites_for_scapy(selected_mode)
 
-    ensure_prerequisites_for_scapy(mode)
-
-    # Targets
-    targets = expand_targets(args.targets)
-    if len(targets) == 0:
+    # Expand targets
+    target_labels = expand_targets_to_list(parsed_args.targets)
+    if not target_labels:
         print("No targets.")
         sys.exit(1)
 
     # Resolve AUTO filenames once
-    _ts = ts_utc()
+    ts_compact = ts_utc_compact()
+    if parsed_args.csv == "AUTO":
+        parsed_args.csv = f"scan_csv_{ts_compact}.csv"
+    if parsed_args.json == "AUTO":
+        parsed_args.json = f"scan_json_{ts_compact}.json"
 
-    if args.csv == "AUTO":
-        args.csv = f"scan_csv_{_ts}.csv"
-    if args.json == "AUTO":
-        args.json = f"scan_json_{_ts}.json"
-
-    # For PCAP we keep a base; single target becomes <base>.pcap, multiple => <base>.<ip>.pcap
-    pcap_auto = (args.pcap == "AUTO")
-    pcap_base = None
-    if pcap_auto:
-        pcap_base = f"scan_pcap_{_ts}"   # no extension here
-        args.pcap = pcap_base            # reuse existing logic below
+    # For PCAP: naming
+    if parsed_args.pcap == "AUTO":
+        parsed_args.pcap = f"scan_pcap_{ts_compact}"
 
     # Header
     print("*** PORT SCANNER MRIB ***")
     print("")
     print(
         f"SCAN start={utc_now_str()} "
-        f"mode={mode} "
-        f"targets={len(targets)} "
-        f"ports={len(ports)} "
-        f"concurrency={args.concurrency} "
-        f"timeout={args.timeout}s "
-        f"rate={args.rate}/s"
+        f"mode={selected_mode} "
+        f"targets={len(target_labels)} "
+        f"ports={len(selected_ports)} "
+        f"concurrency={parsed_args.concurrency} "
+        f"timeout={parsed_args.timeout}s "
+        f"rate={parsed_args.rate}/s"
     )
     print("")
 
-    # Run
-    all_open_results: List[Dict[str, object]] = []
+    aggregate_confirmed_open: List[Dict[str, object]] = []
+    aggregate_all_results: List[Dict[str, object]] = []
 
+    # Orchestration loop
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-        # Map resolved_ip -> (sniffer, filename) when --pcap is enabled
-        sniffer_map: Dict[str, Any] = {}
+        # Track sniffers per resolved host when --pcap is enabled
+        host_sniffers: Dict[str, Tuple[Any, str]] = {}
 
-        for target_label in targets:
-            resolved_ip = loop.run_until_complete(resolve_to_ip(target_label))
-            print(f"Targeting DOMAIN {target_label} [{resolved_ip}]")
+        for label in target_labels:
+            resolved_ip = loop.run_until_complete(resolve_dns_label_to_ip(label))
+            # Verbose domain to IP line for readability
+            if label != resolved_ip:
+                print(f"Targeting DOMAIN {label} [{resolved_ip}]")
+            else:
+                print(f"TARGET {label} -> {resolved_ip}")
             print("")
 
-            # Start PCAP per host if requested
-
-            pcap_arg = getattr(args, "pcap", None)
-            
-            pcap_filename: Optional[str] = None
-
-            if pcap_arg:
-                if len(targets) == 1 and str(pcap_arg).lower().endswith(".pcap"):
-                    pcap_filename = pcap_arg
+            # Start PCAP sniffer if requested
+            if getattr(parsed_args, "pcap", None):
+                if len(target_labels) == 1 and str(parsed_args.pcap).lower().endswith(".pcap"):
+                    pcap_filename = parsed_args.pcap
                 else:
-                    base = pcap_arg[:-5] if str(pcap_arg).lower().endswith(".pcap") else pcap_arg
-                    pcap_filename = f"{base}.{resolved_ip}.pcap" if len(targets) > 1 else f"{base}.pcap"                   
-
-                sniffer = start_pcap_sniffer(filter_expr=f"host {resolved_ip}")
-
+                    base = parsed_args.pcap[:-5] if str(parsed_args.pcap).lower().endswith(".pcap") else parsed_args.pcap
+                    pcap_filename = f"{base}.{resolved_ip}.pcap" if len(target_labels) > 1 else f"{base}.pcap"
+                sniffer = start_pcap_sniffer_for_host(filter_expression=f"host {resolved_ip}")
                 if sniffer is None:
                     print("Warning: could not start packet sniffer for host", resolved_ip)
-                sniffer_map[resolved_ip] = (sniffer, pcap_filename)
+                host_sniffers[resolved_ip] = (sniffer, pcap_filename)
 
-            open_for_host = loop.run_until_complete(
-                scan_host_ports(
-                    host_ip=resolved_ip,
-                    ports=ports,
-                    mode=mode,
-                    timeout_seconds=args.timeout,
-                    max_concurrency=max(1, args.concurrency),
-                    show_closed=args.show_closed,
-                    banner_enabled=args.banner,
-                    ops_per_sec=max(0, args.rate),
-                    udp_probe_kind=args.udp_probe,
-                    retries=max(1, args.retries),
-                    backoff_seconds=max(0.0, args.retry_backoff),
+            # Run the host scan and gather results
+            open_for_host, all_for_host = loop.run_until_complete(
+                scan_all_selected_ports_for_host(
+                    target_ip=resolved_ip,
+                    selected_ports=selected_ports,
+                    selected_mode=selected_mode,
+                    timeout_seconds=parsed_args.timeout,
+                    max_concurrency=parsed_args.concurrency,
+                    show_closed_in_output=parsed_args.show_closed,
+                    banner_enabled=parsed_args.banner,
+                    per_host_ops_per_sec=parsed_args.rate,
+                    udp_probe_kind=parsed_args.udp_probe,
+                    retries=max(1, parsed_args.retries),
+                    backoff_seconds=max(0.0, parsed_args.retry_backoff),
                 )
             )
 
-            # Extend the aggregate with open results for this host
-            for record in open_for_host:
-                all_open_results.append(record)
+            aggregate_confirmed_open.extend(open_for_host)
+            aggregate_all_results.extend(all_for_host)
 
-            # Stop sniffer and write PCAP for this host if enabled
-            if getattr(args, "pcap", None):
-                sniffer, filename = sniffer_map.get(resolved_ip, (None, None))
-                if filename:
-                    stop_and_write_sniffer(sniffer, filename)
-                    print(f"pcap -> {filename}")
+            # Stop sniffer and write PCAP file for this host if enabled
+            if getattr(parsed_args, "pcap", None):
+                sniffer, pcap_path = host_sniffers.get(resolved_ip, (None, None))
+                if pcap_path:
+                    stop_sniffer_and_write_pcap(sniffer, pcap_path)
+                    print(f"pcap -> {pcap_path}")
 
         loop.close()
 
@@ -1044,39 +916,217 @@ def main() -> None:
         print("Interrupted.")
         sys.exit(130)
 
-    # Footer
+    # Footer and persistence
     print("")
-    print(f"SCAN end={utc_now_str()} open_found={len(all_open_results)}")
+    print(f"SCAN end={utc_now_str()} open_found={len(aggregate_confirmed_open)}")
 
-    # Persist results
-    if args.csv and len(all_open_results) > 0:
-        try:
-            with open(args.csv, mode="w", newline="") as fh:
-                writer = csv.writer(fh)
-                writer.writerow(["host", "port", "proto", "status", "note", "time_utc", "duration_ms"])
-                for rec in all_open_results:
-                    row = [
-                        rec.get("host", ""),
-                        rec.get("port", ""),
-                        rec.get("proto", ""),
-                        rec.get("status", ""),
-                        rec.get("note", ""),
-                        rec.get("time", ""),
-                        rec.get("duration_ms", ""),
-                    ]
-                    writer.writerow(row)
-            print(f"csv -> {args.csv}")
-        except Exception as exc:
-            print(f"Failed to write CSV: {type(exc).__name__}")
+    # Decide which collection to persist
+    rows_for_persistence: List[Dict[str, object]]
+    if parsed_args.show_closed:
+        rows_for_persistence = aggregate_all_results
+    else:
+        rows_for_persistence = aggregate_confirmed_open
 
-    if args.json and len(all_open_results) > 0:
-        try:
-            with open(args.json, mode="w") as fh:
-                json.dump(all_open_results, fh, indent=2)
-            print(f"json -> {args.json}")
-        except Exception as exc:
-            print(f"Failed to write JSON: {type(exc).__name__}")
+    # Write CSV if requested
+    if parsed_args.csv:
+        write_results_to_csv(parsed_args.csv, rows_for_persistence)
 
+    # Write JSON if requested
+    if parsed_args.json:
+        write_results_to_json(parsed_args.json, rows_for_persistence)
+
+    return aggregate_confirmed_open, aggregate_all_results
+
+# -----------------------------------------------------------------------------
+# Batch mode: parse and run multiple CLI specs from a file
+# -----------------------------------------------------------------------------
+
+def parse_spec_line_to_argv(line: str) -> Optional[List[str]]:
+    """
+    Convert one text line into argv tokens.
+    - Ignore empty lines, comments (#...), and lines of only '#', '-' or spaces.
+    - Drop any tokens before the first '-' option, so both full CLI and flags-only lines work.
+    """
+    s = line.strip()
+    if not s:
+        return None
+    if s.startswith("#") or set(s) <= {"#", "-", " "}:
+        return None
+    try:
+        tokens = shlex.split(s, comments=False, posix=True)
+    except ValueError:
+        return None
+    if not tokens:
+        return None
+    while tokens and not tokens[0].startswith("-"):
+        tokens.pop(0)
+    return tokens or None
+
+def run_batch_from_file(spec_file: str) -> None:
+    """
+    Reads SPECFILE and executes each valid CLI spec sequentially.
+    Each spec line is parsed against the same CLI as single-run mode.
+    """
+    parser = build_cli_parser()
+    line_no = 0
+    with open(spec_file, "r", encoding="utf-8", errors="ignore") as fh:
+        for raw in fh:
+            line_no += 1
+            argv = parse_spec_line_to_argv(raw)
+            if argv is None:
+                continue
+            print(f"\n===== BATCH {line_no}: {' '.join(argv)} =====")
+            try:
+                args = parser.parse_args(argv)
+            except SystemExit:
+                print(f"[BATCH-{line_no}] Invalid spec: {raw.strip()}")
+                continue
+            run_full_scan(args)
+
+# -----------------------------------------------------------------------------
+# Test battery: quick probes against a list of targets
+# -----------------------------------------------------------------------------
+
+def run_test_battery(targets_file: str,
+                     base_args: argparse.Namespace) -> None:
+
+    #Execute a compact test battery for targets in 'targets_file':
+
+    targets = read_targets_from_file(targets_file)
+    if not targets:
+        print("No targets found in test file.")
+        return
+
+    test_ports_connect = [21, 22, 80, 443]
+    test_ports_syn = [21, 22, 80, 443]
+    test_ports_udp = [53]
+
+    agg_open: List[Dict[str, object]] = []
+    agg_all: List[Dict[str, object]] = []
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    # Connect scans (always)
+    for label in targets:
+        resolved_ip = loop.run_until_complete(resolve_dns_label_to_ip(label))
+        print(f"[TEST] TARGET {label} -> {resolved_ip}")
+        open_for_host, all_for_host = loop.run_until_complete(
+            scan_all_selected_ports_for_host(
+                target_ip=resolved_ip,
+                selected_ports=test_ports_connect,
+                selected_mode="connect",
+                timeout_seconds=base_args.timeout,
+                max_concurrency=base_args.concurrency,
+                show_closed_in_output=base_args.show_closed,
+                banner_enabled=base_args.banner,
+                per_host_ops_per_sec=base_args.rate,
+                udp_probe_kind=base_args.udp_probe,
+                retries=max(1, base_args.retries),
+                backoff_seconds=max(0.0, base_args.retry_backoff),
+            )
+        )
+        agg_open.extend(open_for_host)
+        agg_all.extend(all_for_host)
+
+    # Scapy-dependent tests
+    scapy_ok = SCAPY_AVAILABLE
+    try:
+        euid = os.geteuid()
+    except AttributeError:
+        euid = None
+
+    if scapy_ok and euid == 0:
+        # SYN scans
+        for label in targets:
+            resolved_ip = loop.run_until_complete(resolve_dns_label_to_ip(label))
+            print(f"[TEST] SYN-target {label} -> {resolved_ip}")
+            open_for_host, all_for_host = loop.run_until_complete(
+                scan_all_selected_ports_for_host(
+                    target_ip=resolved_ip,
+                    selected_ports=test_ports_syn,
+                    selected_mode="syn",
+                    timeout_seconds=base_args.timeout,
+                    max_concurrency=base_args.concurrency,
+                    show_closed_in_output=base_args.show_closed,
+                    banner_enabled=False,
+                    per_host_ops_per_sec=base_args.rate,
+                    udp_probe_kind=base_args.udp_probe,
+                    retries=max(1, base_args.retries),
+                    backoff_seconds=max(0.0, base_args.retry_backoff),
+                )
+            )
+            agg_open.extend(open_for_host)
+            agg_all.extend(all_for_host)
+
+        # UDP DNS probes
+        for label in targets:
+            resolved_ip = loop.run_until_complete(resolve_dns_label_to_ip(label))
+            print(f"[TEST] UDP-target {label} -> {resolved_ip}")
+            open_for_host, all_for_host = loop.run_until_complete(
+                scan_all_selected_ports_for_host(
+                    target_ip=resolved_ip,
+                    selected_ports=test_ports_udp,
+                    selected_mode="udp",
+                    timeout_seconds=base_args.timeout,
+                    max_concurrency=base_args.concurrency,
+                    show_closed_in_output=base_args.show_closed,
+                    banner_enabled=False,
+                    per_host_ops_per_sec=base_args.rate,
+                    udp_probe_kind="dns",
+                    retries=max(1, base_args.retries),
+                    backoff_seconds=max(0.0, base_args.retry_backoff),
+                )
+            )
+            agg_open.extend(open_for_host)
+            agg_all.extend(all_for_host)
+    else:
+        if not scapy_ok:
+            print("Warning: Scapy not available. Skipping SYN/UDP tests. Install with: pip install scapy")
+        elif euid != 0:
+            print("Warning: Not running as root. Skipping SYN/UDP tests.")
+
+    loop.close()
+
+    # Persistence decision same as normal run
+    rows_for_persistence = agg_all if base_args.show_closed else agg_open
+
+    # Auto filenames if requested with bare --csv/--json
+    ts_compact = ts_utc_compact()
+    if base_args.csv:
+        csvname = base_args.csv if base_args.csv != "AUTO" else f"test_csv_{ts_compact}.csv"
+        write_results_to_csv(csvname, rows_for_persistence)
+    if base_args.json:
+        jsonname = base_args.json if base_args.json != "AUTO" else f"test_json_{ts_compact}.json"
+        write_results_to_json(jsonname, rows_for_persistence)
+
+    print(f"TEST end={utc_now_str()} open_found={len(agg_open)}")
+
+# -----------------------------------------------------------------------------
+# Main entry point
+# -----------------------------------------------------------------------------
+
+def main() -> None:
+    # Parse arguments
+    cli_parser = build_cli_parser()
+    args = cli_parser.parse_args()
+
+    # Batch mode: run multiple specs and exit
+    if args.test:
+        run_batch_from_file(args.test)
+        return
+
+    # Test battery mode: quick probes on a list of targets and exit
+    if args.test_battery:
+        run_test_battery(args.test_battery, args)
+        return
+
+    # Single run
+    run_full_scan(args)
+
+# -----------------------------------------------------------------------------
+# Standard Python entry guard
+# -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
     main()

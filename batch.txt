@@ -1,0 +1,6 @@
+--targets hotelasp.com --ports "21" --banner --csv batch-result1.csv --json batch-result1.json --pcap batch-result1.pcap
+--targets 160.153.248.110 --ports "21,22,53,135,80,443,445,50920-50930" --banner --shuffle --rate 5 --csv batch-result2.csv --json batch-result2.json --pcap batch-result2.pcap
+--targets hackthissite.org --start 1 --end 65 --syn --show-closed --rate 10 --concurrency 100 --csv batch-result3.csv --json batch-result3.json --pcap batch-result3.pcap
+--targets 8.8.8.8 --ports 53 --udp --udp-probe dns --timeout 2 --retries 2 --retry-backoff 0.2 --pcap batch-result4.pcap --csv batch-result4.csv --json batch-result4.json
+--targets 129.6.15.28 --ports 123 --udp --udp-probe ntp --timeout 5 --retries 2 --retry-backoff 0.3 --pcap batch-result5.pcap --csv batch-result5.csv --json batch-result5.json
+
