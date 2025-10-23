@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # --------------
+#
 # Asynchronous port scanner with three modes:
 #   + PCAP capture option (--pcap)
 #   1) TCP connect scan using asyncio (no root)
@@ -14,11 +15,25 @@
 # -------------- EXAMPLES --------------
 # sudo -i 
 # cd /home/kali/Desktop/RT
+#########################################################################################
+### Scan port 21 and get banner and save output using specific names
 # python3 portscanner-mrib.py --targets hotelasp.com --ports "21" --banner --csv results.csv --json results.json --pcap results.pcap
-# python3 portscanner-mrib.py --targets hotelasp.com --ports "21,22,53,135,80,443,445,50920-50930" --banner --shuffle --rate 5 --csv results.csv --json results.json --pcap results.pcap
-# python3 portscanner-mrib.py --targets 160.153.248.110 --start 1 --end 65535 --syn --pcap results.pcap --rate 5 --concurrency 10 --csv results.csv --json results.json
-# python3 portscanner-mrib.py --targets 160.153.248.110 --start 1 --end 65535 --syn --rate 5 --concurrency 10 --csv --json --pcap
-# python3 portscanner-mrib.py --targets hotelasp.com --ports 53 --udp --udp-probe dns --timeout 2 --retries 2 --retry-backoff 0.2 --pcap scan_pcap.pcap --csv scan.csv --json scan.json
+#########################################################################################
+### Scan specific ports, save results with default names, shuffle port order and limit to 5 scans per sec
+# python3 portscanner-mrib.py --targets 160.153.248.110 --ports "21,22,53,135,80,443,445,50920-50930" --banner --shuffle --rate 5 --csv --json --pcap 
+#########################################################################################
+### https://www.hackthissite.org/ - 137.74.187.102 Scan all ports with the min packets. Calls scan_tcp_syn. Do not wait for SYN-ACK. Limit 10 scans per sec and start 100 parallel concurrency processes
+# python3 portscanner-mrib.py --targets hackthissite.org --start 1 --end 65535 --syn --show-closed --rate 10 --concurrency 100 --csv --json --pcap
+#########################################################################################
+### Scan port 53 using UDP. Check for dns port and use specific payload for DNS. If fail retries 2 times and wait 0.2 in the first and 0.4 in the second retry. Timeout set to 2s
+# python3 portscanner-mrib.py --targets 8.8.8.8 --ports 53 --udp --udp-probe dns --timeout 2 --retries 2 --retry-backoff 0.2 --pcap --csv --json
+#########################################################################################
+### Scan port 123 using NTP. Check for dns port and use specific payload for NTP. 
+# python3 portscanner-mrib.py --targets 129.6.15.28 --ports 123 --udp --udp-probe ntp --timeout 5 --retries 2 --retry-backoff 0.3 --pcap --csv --json
+#########################################################################################
+
+ 
+
 
 from __future__ import annotations
 
@@ -43,7 +58,8 @@ from typing import Dict, List, Optional, Tuple, Any
 try:
     import scapy.all as scapy
     from scapy.packet import Raw
-    SCAPY_AVAILABLE: bool = True
+    scapy.conf.use_pcap = True  
+    SCAPY_AVAILABLE = True
 except Exception:
     SCAPY_AVAILABLE = False
 
@@ -52,7 +68,7 @@ except Exception:
 # -----------------------------------------------------------------------------
 
 DEFAULTS: Dict[str, object] = {
-    "HOST": os.environ.get("PORTSCAN_HOST", "160.153.248.110"),
+    "HOST": os.environ.get("PORTSCAN_HOST", "137.74.187.102"),
     "START": int(os.environ.get("PORTSCAN_START", "1")),
     "END": int(os.environ.get("PORTSCAN_END", "1024")),
     "CONCURRENCY": int(os.environ.get("PORTSCAN_CONCURRENCY", "1")),
@@ -386,7 +402,7 @@ async def scan_tcp_syn(host: str,
 # UDP scan (Scapy in executor)
 # -----------------------------------------------------------------------------
 
-def build_udp_payload(dst_port: int, probe_kind: str):
+def build_udp_payload_v1(dst_port: int, probe_kind: str):
     # Build optional UDP payload for protocol-aware probing.
     # Options
     # -------
@@ -397,15 +413,40 @@ def build_udp_payload(dst_port: int, probe_kind: str):
     if probe_kind == "dns" and dst_port == 53:
         return scapy.DNS(rd=1, qd=scapy.DNSQR(qname="google.com"))
 
+    # if probe_kind == "ntp" and dst_port == 123:
+    #     # LI=0, VN=3, Mode=3 (client): first byte 0x1b followed by zeros to size 48
+    #     payload_bytes = b"\x1b" + (b"\x00" * 47)
+    #     return Raw(payload_bytes)
+
     if probe_kind == "ntp" and dst_port == 123:
-        # LI=0, VN=3, Mode=3 (client): first byte 0x1b followed by zeros to size 48
-        payload_bytes = b"\x1b" + (b"\x00" * 47)
-        return Raw(payload_bytes)
+        # LI=0, VN=4, Mode=3 -> 0x23, plus current transmit timestamp (sec, frac)
+        from scapy.packet import Raw
+        import struct, time
+        NTP_EPOCH = 2208988800  # 1900->1970
+        now = time.time() + NTP_EPOCH
+        sec = int(now)
+        frac = int((now - sec) * (1 << 32)) & 0xFFFFFFFF
+        first_byte = bytes([0x23])  # 0b0010_0011
+        # bytes 1..39 zero; bytes 40..47 = transmit timestamp
+        payload = first_byte + b"\x00"*39 + struct.pack("!II", sec, frac)
+        return Raw(payload)
 
     return None
 
+def build_udp_payload_v2(dst_port: int, probe_kind: str):
+    if probe_kind == "dns" and dst_port == 53:
+        return scapy.DNS(rd=1, qd=scapy.DNSQR(qname="google.com"))
+    if probe_kind == "ntp" and dst_port == 123:
+        import struct, time
+        NTP_EPOCH = 2208988800
+        now = time.time() + NTP_EPOCH
+        sec = int(now)
+        frac = int((now - sec) * (1 << 32)) & 0xFFFFFFFF
+        first = bytes([0x23])  # LI=0, VN=4, Mode=3
+        return Raw(first + b"\x00"*39 + struct.pack("!II", sec, frac))
+    return None
 
-def scapy_udp_once(dst_ip: str,
+def scapy_udp_once_v1(dst_ip: str,
                    dst_port: int,
                    timeout_seconds: float,
                    probe_kind: str) -> Tuple[str, str]:
@@ -417,10 +458,11 @@ def scapy_udp_once(dst_ip: str,
     # - No response          -> "open|filtered", "no-response" (ambiguous)
     # - Other ICMP           -> "filtered", "icmp type=X code=Y"
 
-    payload = build_udp_payload(dst_port, probe_kind)
+    payload = build_udp_payload_v1(dst_port, probe_kind)
 
     ip_layer = scapy.IP(dst=dst_ip)
-    udp_layer = scapy.UDP(dport=dst_port)
+    #udp_layer = scapy.UDP(dport=dst_port)
+    udp_layer = scapy.UDP(sport=scapy.RandShort(), dport=dst_port)
 
     if payload is None:
         packet = ip_layer / udp_layer
@@ -452,6 +494,47 @@ def scapy_udp_once(dst_ip: str,
 
     return "open|filtered", "unexpected"
 
+
+def scapy_udp_once_v2(dst_ip: str, dst_port: int, timeout_seconds: float, probe_kind: str):
+    payload = build_udp_payload_v2(dst_port, probe_kind)
+
+    try:
+        iface = scapy.conf.route.route(dst_ip)[0]
+    except Exception:
+        iface = scapy.conf.iface
+
+    sport = int(scapy.RandShort())
+    pkt = scapy.IP(dst=dst_ip, ttl=64) / scapy.UDP(sport=sport, dport=dst_port) / (payload or b"")
+
+    bpf = f"udp and src host {dst_ip} and src port {dst_port} and dst port {sport}"
+
+    sniffer = scapy.AsyncSniffer(filter=bpf, iface=iface, store=True, promisc=True)
+    sniffer.start()
+    time.sleep(0.02)               # dá tempo ao sniffer para armar
+    scapy.send(pkt, verbose=0)     # só agora envia
+    sniffer.join(timeout_seconds)
+    pkts = sniffer.stop()
+
+    if not pkts:
+        return "open|filtered", "no-response"
+
+    resp = pkts[0]
+    if resp.haslayer(scapy.ICMP):
+        icmp = resp[scapy.ICMP]
+        if icmp.type == 3 and icmp.code == 3:
+            return "closed", "icmp-port-unreachable"
+        return "filtered", f"icmp type={icmp.type} code={icmp.code}"
+
+    if resp.haslayer(scapy.UDP) and resp[scapy.IP].src == dst_ip and resp[scapy.UDP].sport == dst_port:
+        if probe_kind == "dns" and resp.haslayer(scapy.DNS):
+            return "open", "dns-reply"
+        raw = bytes(resp[scapy.UDP].payload)
+        first = raw[0] if raw else None
+        return "open", (f"udp-reply first=0x{first:02x}" if first is not None else "udp-reply")
+
+    return "filtered", "unexpected-src-or-proto"
+
+
 async def scan_udp(host: str,
                    port: int,
                    timeout_seconds: float,
@@ -468,7 +551,7 @@ async def scan_udp(host: str,
         try:
             status, note = await loop.run_in_executor(
                 None,
-                scapy_udp_once,
+                scapy_udp_once_v2,
                 host,
                 port,
                 timeout_seconds,
@@ -830,6 +913,11 @@ def main() -> None:
     parser = build_arg_parser()
     args = parser.parse_args()
 
+    #TEST ARGS
+    #args.targets='137.74.187.102'; args.ports="123"; args.syn=False; args.udp=False; args.udp_probe='empty'; args.rate=0; args.retries=1; args.retry_backoff=0.2; timeout=1.0; args.start=1; args.end=1024; args.concurrency=1; show_closed=False; shuffle=False; args.banner=False; csv=None; json=None; args.pcap=None; 
+    #args.targets='129.6.15.28'; args.ports='123'; args.syn=False; args.udp=True; args.udp_probe='ntp'; args.rate=0; args.retries=2; args.retry_backoff=0.3; timeout=5.0; args.start=1; args.end=1024; args.concurrency=1; show_closed=False; shuffle=False; args.banner=False; csv=''; json=''; args.pcap=''; 
+    #args.targets='8.8.8.8'; args.ports='53'; args.syn=False; args.udp=True; args.udp_probe='dns'; args.rate=0; args.retries=1; args.retry_backoff=0.2; timeout=1.0; args.start=1; args.end=1024; args.concurrency=1; show_closed=False; shuffle=False; args.banner=False; csv=''; json=''; args.pcap=''; 
+
     # Ports
     ports = parse_ports(args.start, args.end, args.ports)
     if len(ports) == 0:
@@ -901,7 +989,7 @@ def main() -> None:
 
         for target_label in targets:
             resolved_ip = loop.run_until_complete(resolve_to_ip(target_label))
-            print(f"TARGET {target_label} -> {resolved_ip}")
+            print(f"Targeting DOMAIN {target_label} [{resolved_ip}]")
             print("")
 
             # Start PCAP per host if requested
