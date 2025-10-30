@@ -1,34 +1,31 @@
 #!/usr/bin/env python3
-"""
-SMRIB – Scanner Multi-protocolo com Reconhecimento Inteligente e Bufferização.
-
-Perfis de execução exemplificados:
-1. Coleta rápida via TCP connect com banners e artefatos completos.
-   Comando: python3 smrib.py --targets hotelasp.com --ports "21" --banner --csv results.csv --json results.json --pcap results.pcap
-   Resultado: abre conexões completas, coleta banner inicial e grava arquivos CSV/JSON/PCAP com nomes explícitos.
-2. Conjunto de portas ordenado aleatoriamente com limitação de taxa.
-   Comando: python3 smrib.py --targets 160.153.248.110 --ports "21,22,53,135,80,443,445,50920-50930" --banner --shuffle --rate 5 --csv --json --pcap
-   Resultado: embaralha a ordem das portas, impõe até cinco operações por segundo e gera artefatos padrões.
-3. Varrimento TCP SYN em alta concorrência.
-   Comando: python3 smrib.py --targets hackthissite.org --start 1 --end 65535 --syn --show-closed --rate 10 --concurrency 100 --csv --json --pcap
-   Resultado: envia pacotes SYN com Scapy, respeita limites de taxa e grava portas abertas e fechadas.
-4. Sonda UDP DNS confiável.
-   Comando: python3 smrib.py --targets 8.8.8.8 --ports 53 --udp --udp-probe dns --timeout 2 --retries 2 --retry-backoff 0.2 --pcap --csv --json
-   Resultado: realiza consultas DNS UDP com retentativas exponenciais antes de considerar uma porta fechada.
-5. Sonda UDP NTP para servidores de tempo.
-   Comando: python3 smrib.py --targets 129.6.15.28 --ports 123 --udp --udp-probe ntp --timeout 5 --retries 2 --retry-backoff 0.3 --pcap --csv --json
-   Resultado: envia pacotes NTP, aguarda respostas com tolerância maior e registra todas as evidências.
-6. Execução em lote a partir de especificações externas.
-   Comando: python3 smrib.py --test batch.txt
-   Resultado: processa cada linha válida do arquivo, aplicando as opções fornecidas e repetindo o fluxo de saída.
-7. Bateria de testes curtos para validação rápida.
-   Comando: python3 smrib.py --test-battery targets.txt --csv battery.csv --json battery.json --pcap battery.pcap
-   Resultado: executa conectividade TCP básica e, quando possível, varreduras SYN e sondas UDP para diagnóstico.
-
-Política de comentários:
-- Comentários automáticos de manutenção utilizam o marcador [AUTO] e podem ser ajustados futuramente.
-- Comentários manuais devem usar o marcador [USER] para preservar a autoria e não serão removidos.
-"""
+# SMRIB – Multi-protocol scanner with intelligent recognition and buffering.
+#
+# Fresh execution examples generated for each primary capability:
+# 1. Targeted TCP connect sweep with banner capture and explicit artifact names.
+#    Command: python3 smrib.py --targets scanner.dev --ports "443,8443" --banner --csv tls_connect.csv --json tls_connect.json --pcap tls_connect.pcap
+#    Outcome: establishes full TCP sessions, captures available TLS banners, and stores results in the requested CSV/JSON/PCAP files.
+# 2. High-concurrency TCP SYN reconnaissance respecting rate guards.
+#    Command: sudo python3 smrib.py --targets audit.net --start 1 --end 1024 --syn --rate 15 --concurrency 600 --json syn_audit.json
+#    Outcome: performs Scapy-powered SYN scans, throttled to fifteen operations per second, while collecting structured JSON output.
+# 3. UDP DNS inspection with adaptive retries and packet capture.
+#    Command: sudo python3 smrib.py --targets 1.1.1.1 --ports 53 --udp --udp-probe dns --timeout 1.5 --retries 3 --retry-backoff 0.25 --pcap dns_lookup.pcap
+#    Outcome: emits DNS queries with exponential backoff, captures responses, and reports UDP reachability.
+# 4. UDP NTP probing for time services validation.
+#    Command: sudo python3 smrib.py --targets 17.253.84.253 --ports 123 --udp --udp-probe ntp --timeout 4 --retries 2 --csv ntp_report.csv
+#    Outcome: verifies NTP listener availability, persisting responses into a CSV report.
+# 5. Fast mode acceleration with shuffled ports and automatic adjustments.
+#    Command: python3 smrib.py --targets prod.edge --ports "22,80,443,9000-9005" --fast --show-closed --json fast_profile.json
+#    Outcome: enforces aggressive timeouts, disables banners, randomizes port order, and exports a JSON summary including closed ports.
+# 6. Batch-driven multi-run execution from specification file.
+#    Command: python3 smrib.py --test runspec.txt
+#    Outcome: iterates through each valid CLI line inside runspec.txt, executing scans sequentially.
+# 7. Compact diagnostic battery against a list of endpoints.
+#    Command: python3 smrib.py --test-battery diagnostics.txt --csv diagnostics.csv --json diagnostics.json
+#    Outcome: conducts TCP connect, SYN, and UDP checks where permitted, consolidating the diagnostic results.
+# 8. Web directory listing helper using HTTP wordlists.
+#    Command: python3 smrib.py --web-dir --url https://portal.example --wordlist wordlist.txt
+#    Outcome: probes candidate paths from the wordlist and prints discovered HTTP status codes.
 
 from __future__ import annotations
 
@@ -80,10 +77,8 @@ SCAPY_CONCURRENCY_LIMIT: int = max(1, int(os.environ.get("PORTSCAN_SCAPY_MAX_CON
 FD_LIMIT_SAFETY_MARGIN: int = 32
 
 FAST_MODE_MIN_CONCURRENCY: int = 1024
-
-
+# Return the soft RLIMIT_NOFILE value when available.
 def query_process_fd_soft_limit() -> Optional[int]:
-    """Return the soft RLIMIT_NOFILE value when available."""
 
     if resource is None:
         return None
@@ -100,9 +95,8 @@ def query_process_fd_soft_limit() -> Optional[int]:
         return None
     return int(soft_limit)
 
-
+# Clamp concurrency so it respects the process file descriptor soft limit.
 def apply_fd_limit_guardrail(desired_concurrency: int) -> Tuple[int, Optional[int]]:
-    """Clamp concurrency so it respects the process file descriptor soft limit."""
 
     sanitized = max(1, int(desired_concurrency))
     soft_limit = query_process_fd_soft_limit()
@@ -115,23 +109,20 @@ def apply_fd_limit_guardrail(desired_concurrency: int) -> Tuple[int, Optional[in
         return sanitized, None
     return max_allowed, soft_limit
 
-
+# [AUTO]Return an ISO-like timestamp string in UTC for log entries.
 def utc_now_str() -> str:
-    """[AUTO]Return an ISO-like timestamp string in UTC for log entries."""
 
     now_utc = datetime.now(timezone.utc)
     timestamp = now_utc.strftime("%Y-%m-%d %H:%M:%S")
     return timestamp
 
-
+# [AUTO]Generate a compact UTC timestamp suited for filenames.
 def ts_utc_compact() -> str:
-    """[AUTO]Generate a compact UTC timestamp suited for filenames."""
 
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
-
+# [AUTO]Load target entries from a UTF-8 text file, ignoring comments.
 def read_targets_from_file(file_path: str) -> List[str]:
-    """[AUTO]Load target entries from a UTF-8 text file, ignoring comments."""
 
     targets: List[str] = []
     with open(file_path, mode="r", encoding="utf-8", errors="ignore") as handle:
@@ -143,9 +134,8 @@ def read_targets_from_file(file_path: str) -> List[str]:
                 continue
             targets.append(line)
     return targets
-
+# [AUTO]Expand a textual CIDR or single IP address into host strings.
 def expand_cidr_to_hosts(cidr_or_ip: str) -> Optional[List[str]]:
-    """[AUTO]Expand a textual CIDR or single IP address into host strings."""
 
     try:
         network = ipaddress.ip_network(cidr_or_ip, strict=False)
@@ -155,9 +145,8 @@ def expand_cidr_to_hosts(cidr_or_ip: str) -> Optional[List[str]]:
     if not hosts:
         hosts.append(str(network.network_address))
     return hosts
-
+# [AUTO]Resolve an argument into targets via file, CIDR range, or literal host.
 def expand_targets_to_list(target_argument: str) -> List[str]:
-    """[AUTO]Resolve an argument into targets via file, CIDR range, or literal host."""
 
     if os.path.isfile(target_argument):
         return read_targets_from_file(target_argument)
@@ -166,9 +155,8 @@ def expand_targets_to_list(target_argument: str) -> List[str]:
         return cidr_hosts
     return [target_argument]
 
-
+# [AUTO]Detect whether an address should be treated as public internet space.
 def is_external_ip(ip_text: str) -> bool:
-    """[AUTO]Detect whether an address should be treated as public internet space."""
 
     try:
         ip_obj = ipaddress.ip_address(ip_text)
@@ -185,9 +173,8 @@ def is_external_ip(ip_text: str) -> bool:
         return False
     return True
 
-
+# [AUTO]Tune parameters aggressively when --fast is active.
 def apply_fast_mode_overrides(parsed_arguments: argparse.Namespace) -> Optional[Dict[str, object]]:
-    """[AUTO]Tune parameters aggressively when --fast is active."""
 
     if not getattr(parsed_arguments, "fast", False):
         return None
@@ -240,9 +227,8 @@ def apply_fast_mode_overrides(parsed_arguments: argparse.Namespace) -> Optional[
 
     return fast_mode_adjustments
 
-
+# [AUTO]Enforce safe concurrency bounds for the chosen scan strategy.
 def normalize_concurrency_for_mode(requested_concurrency: int, selected_mode: str) -> Tuple[int, Optional[str]]:
-    """[AUTO]Enforce safe concurrency bounds for the chosen scan strategy."""
 
     initial_value = max(1, int(requested_concurrency))
     adjusted_value = initial_value
@@ -275,9 +261,8 @@ def normalize_concurrency_for_mode(requested_concurrency: int, selected_mode: st
 
     return adjusted_value, None
 
-
+# [AUTO]Translate CLI port expressions into a validated, sorted list.
 def parse_port_specification(start_port: int, end_port: int, port_spec: Optional[str]) -> List[int]:
-    """[AUTO]Translate CLI port expressions into a validated, sorted list."""
 
     ports: List[int] = []
     if port_spec is None:
@@ -341,7 +326,7 @@ async def resolve_dns_label_to_ip(dns_label: str) -> str:
 async def try_read_banner(stream_reader: asyncio.StreamReader,
                           idle_timeout_seconds: float,
                           max_bytes: int = 4096) -> str:
-    """Read as much banner data as possible until the connection goes idle."""
+    # Read as much banner data as possible until the connection goes idle.
 
     if idle_timeout_seconds <= 0:
         return ""
@@ -411,11 +396,10 @@ async def scan_tcp_connect_once(target_ip: str,
     duration_ms = int((time.perf_counter() - start) * 1000)
     return target_ip, target_port, "tcp", "open", banner_text, duration_ms
 
-
+# [AUTO]Send one SYN probe and classify the TCP response semantics.
 def scapy_send_single_syn(dst_ip: str,
                           dst_port: int,
                           timeout_seconds: float) -> Tuple[str, str]:
-    """[AUTO]Send one SYN probe and classify the TCP response semantics."""
 
     ip_layer = scapy.IP(dst=dst_ip)
     tcp_layer = scapy.TCP(dport=dst_port, flags="S")
@@ -471,9 +455,8 @@ async def scan_tcp_syn_once(target_ip: str,
     duration_ms = int((time.perf_counter() - scan_start) * 1000)
     return target_ip, target_port, "tcp", "filtered", last_error_note or "error", duration_ms
 
-
+# [AUTO]Craft protocol-aware UDP payloads when probes require content.
 def build_udp_probe_payload(dst_port: int, probe_kind: str):
-    """[AUTO]Craft protocol-aware UDP payloads when probes require content."""
 
     if probe_kind == "dns" and dst_port == 53:
         return scapy.DNS(rd=1, qd=scapy.DNSQR(qname="google.com"))
@@ -492,7 +475,7 @@ def scapy_udp_probe_sniff_once(dst_ip: str,
                                dst_port: int,
                                timeout_seconds: float,
                                probe_kind: str) -> Tuple[str, str]:
-    """[AUTO]Send a UDP probe and sniff for replies or ICMP errors."""
+    # [AUTO]Send a UDP probe and sniff for replies or ICMP errors.
 
     payload = build_udp_probe_payload(dst_port, probe_kind)
 
@@ -571,11 +554,11 @@ async def scan_udp_once(target_ip: str,
     return target_ip, target_port, "udp", "filtered", last_error_note or "error", duration_ms
 
 
+# [AUTO]Minimal asyncio-based rate limiter to cap per-host throughput.
 class FixedRateLimiter:
-    """[AUTO]Minimal asyncio-based rate limiter to cap per-host throughput."""
 
     def __init__(self, rate_ops_per_sec: int) -> None:
-        """[AUTO]Prepare limiter intervals from the requested operations per second."""
+        # [AUTO]Prepare limiter intervals from the requested operations per second.
 
         self.rate = max(0, rate_ops_per_sec)
         self._interval = 0.0 if self.rate <= 0 else 1.0 / float(self.rate)
@@ -583,7 +566,7 @@ class FixedRateLimiter:
         self._lock = asyncio.Lock()
 
     async def wait(self) -> None:
-        """[AUTO]Sleep just enough to respect the configured rate."""
+        # [AUTO]Sleep just enough to respect the configured rate.
 
         if self.rate <= 0:
             return
@@ -688,13 +671,12 @@ async def scan_all_selected_ports_for_host(target_ip: str,
 
     return confirmed_open_results, all_results_for_host
 
-
+# Provide a hint when --show-only-open hides every result for a host.
 def emit_summary_for_suppressed_results(host_label: str,
                                         ip_address: str,
                                         show_only_open_flag: bool,
                                         open_results: List[Dict[str, object]],
                                         all_results: List[Dict[str, object]]) -> None:
-    """Provide a hint when --show-only-open hides every result for a host."""
     if not show_only_open_flag:
         return
     if open_results or not all_results:
@@ -725,9 +707,8 @@ def emit_summary_for_suppressed_results(host_label: str,
         f"Re-run without --show-only-open to review all results."
     )
 
-
+# [AUTO]Abort early when Scapy-driven modes cannot operate.
 def ensure_prerequisites_for_scapy(selected_mode: str) -> None:
-    """[AUTO]Abort early when Scapy-driven modes cannot operate."""
 
     if selected_mode not in ("syn", "udp"):
         return
@@ -743,9 +724,8 @@ def ensure_prerequisites_for_scapy(selected_mode: str) -> None:
         print("Root privileges required for --syn or --udp. Rerun with sudo.")
         sys.exit(2)
 
-
+# [AUTO]Spin up an AsyncSniffer for the optional BPF filter.
 def start_pcap_sniffer_for_host(filter_expression: Optional[str] = None) -> Any:
-    """[AUTO]Spin up an AsyncSniffer for the optional BPF filter."""
 
     if not SCAPY_AVAILABLE:
         return None
@@ -757,7 +737,7 @@ def start_pcap_sniffer_for_host(filter_expression: Optional[str] = None) -> Any:
         return None
 
 def stop_sniffer_and_write_pcap(sniffer: Any, pcap_filename: str) -> None:
-    """[AUTO]Terminate a running sniffer and persist packets to disk."""
+    # [AUTO]Terminate a running sniffer and persist packets to disk.
 
     if sniffer is None:
         return
@@ -769,7 +749,7 @@ def stop_sniffer_and_write_pcap(sniffer: Any, pcap_filename: str) -> None:
 
 
 def write_results_to_csv(csv_path: str, result_rows: List[Dict[str, object]]) -> None:
-    """[AUTO]Emit scanner results in a tabular CSV format."""
+    # [AUTO]Emit scanner results in a tabular CSV format.
 
     try:
         with open(csv_path, mode="w", newline="") as fh:
@@ -790,7 +770,7 @@ def write_results_to_csv(csv_path: str, result_rows: List[Dict[str, object]]) ->
         print(f"Failed to write CSV: {type(exc).__name__}")
 
 def write_results_to_json(json_path: str, result_rows: List[Dict[str, object]]) -> None:
-    """[AUTO]Persist scanner results as structured JSON."""
+    # [AUTO]Persist scanner results as structured JSON.
 
     try:
         with open(json_path, mode="w") as fh:
@@ -803,7 +783,7 @@ def write_results_to_json(json_path: str, result_rows: List[Dict[str, object]]) 
 def run_web_directory_listing_tool(base_url: Optional[str],
                                    wordlist_path: Optional[str],
                                    request_timeout: float = 10.0) -> bool:
-    """Run a simple web directory listing enumeration based on a wordlist."""
+    # Run a simple web directory listing enumeration based on a wordlist.
 
     if not base_url:
         print("Error: --url/-u is required when using --web-dir.")
@@ -873,9 +853,8 @@ def run_web_directory_listing_tool(base_url: Optional[str],
 
     return True
 
-
+# [AUTO]Construct the command-line interface for SMRIB.
 def build_cli_parser() -> argparse.ArgumentParser:
-    """[AUTO]Construct the command-line interface for SMRIB."""
 
     parser = argparse.ArgumentParser(
         description="Readable async port scanner (asyncio + optional Scapy)"
@@ -1055,9 +1034,8 @@ def build_cli_parser() -> argparse.ArgumentParser:
 
     return parser
 
-
+# [AUTO]Execute the complete scanning workflow for supplied arguments.
 def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
-    """[AUTO]Execute the complete scanning workflow for supplied arguments."""
 
     fast_mode_adjustments = apply_fast_mode_overrides(parsed_arguments)
     show_closed_in_terminal = bool(
@@ -1230,13 +1208,10 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
 
     return aggregate_open_results, aggregate_all_scan_results
 
-
+# Convert one text line into argv tokens.
+# - Ignore empty lines, comments (#...), and lines of only '#', '-' or spaces.
+# - Drop any tokens before the first '-' option, so both full CLI and flags-only lines work.
 def parse_spec_line_to_argv(line: str) -> Optional[List[str]]:
-    """
-    Convert one text line into argv tokens.
-    - Ignore empty lines, comments (#...), and lines of only '#', '-' or spaces.
-    - Drop any tokens before the first '-' option, so both full CLI and flags-only lines work.
-    """
     s = line.strip()
     if not s:
         return None
@@ -1251,12 +1226,9 @@ def parse_spec_line_to_argv(line: str) -> Optional[List[str]]:
     while tokens and not tokens[0].startswith("-"):
         tokens.pop(0)
     return tokens or None
-
+# Read SPECFILE and execute each valid CLI spec sequentially.
+# Each spec line is parsed against the same CLI as single-run mode.
 def run_batch_from_file(spec_file: str) -> None:
-    """
-    Reads SPECFILE and executes each valid CLI spec sequentially.
-    Each spec line is parsed against the same CLI as single-run mode.
-    """
     parser = build_cli_parser()
     line_no = 0
     with open(spec_file, "r", encoding="utf-8", errors="ignore") as fh:
@@ -1273,10 +1245,9 @@ def run_batch_from_file(spec_file: str) -> None:
                 continue
             run_full_scan(args)
 
-
+# [AUTO]Execute a compact verification suite against provided targets.
 def run_test_battery(targets_file: str,
                      base_arguments: argparse.Namespace) -> None:
-    """[AUTO]Execute a compact verification suite against provided targets."""
 
     targets_list = read_targets_from_file(targets_file)
     if not targets_list:
@@ -1446,9 +1417,8 @@ def run_test_battery(targets_file: str,
 
     print(f"TEST end={utc_now_str()} open_found={len(aggregated_open_results)}")
 
-
+# [AUTO]Entry point bridging CLI parsing and execution modes.
 def main() -> None:
-    """[AUTO]Entry point bridging CLI parsing and execution modes."""
 
     cli_parser = build_cli_parser()
     args = cli_parser.parse_args()
