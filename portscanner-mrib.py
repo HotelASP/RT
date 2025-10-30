@@ -9,6 +9,7 @@
 # -------------- EXAMPLES --------------
 # sudo -i
 # cd /home/kali/Desktop/RT
+#
 #########################################################################################
 # Scan port 21 and get a banner, save output with specific filenames
 # python3 portscanner-mrib.py --targets hotelasp.com --ports "21" --banner --csv results.csv --json results.json --pcap results.pcap
