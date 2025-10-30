@@ -6,7 +6,8 @@
 # Execution examples:
 #
 # 1. Targeted TCP connect sweep with banner capture and explicit artifact names.
-#    Command: python3 smrib.py --targets scanner.dev --ports "443,8443" --banner --csv tls_connect.csv --json tls_connect.json --pcap tls_connect.pcap
+#    *** PCAP needs root ***
+#    Command: sudo python3 smrib.py --targets targets_hotelasp.txt --ports "21,22,80,443" --banner --csv hotelasp.csv --json hotelasp.json --pcap hotelasp.pcap
 #    Outcome: establishes full TCP sessions, captures available TLS banners, and stores results in the requested CSV/JSON/PCAP files.
 #
 # 2. High-concurrency TCP SYN reconnaissance respecting rate guards.
