@@ -8,18 +8,7 @@ aluno15-tecnico
 &2CmEfgd6S
 aluno15@tecnicomais.vpn
 
-
 https://ciberium.cybers3c.pt
-
-
-
-
-
-
-
-
-
-
 
 ┌──(root㉿kali-mrib)-[/home/kali/Downloads]
 └─# openvpn sslvpn-aluno5-tecnico-client-config.ovpn 
