@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 import csv
 import ipaddress
@@ -679,6 +680,43 @@ async def scan_all_selected_ports_for_host(target_ip: str,
 
     return confirmed_open_results, all_results_for_host
 
+
+def emit_summary_for_suppressed_results(host_label: str,
+                                        ip_address: str,
+                                        show_only_open_flag: bool,
+                                        open_results: List[Dict[str, object]],
+                                        all_results: List[Dict[str, object]]) -> None:
+    """Provide a hint when --show-only-open hides every result for a host."""
+    if not show_only_open_flag:
+        return
+    if open_results or not all_results:
+        return
+
+    status_note_pairs = [
+        (record.get("status", ""), record.get("note", ""))
+        for record in all_results
+    ]
+    if not status_note_pairs:
+        return
+
+    most_common_pair, _ = Counter(status_note_pairs).most_common(1)[0]
+    status_text, note_text = most_common_pair
+    if note_text:
+        description = f"{status_text} ({note_text})"
+    else:
+        description = status_text or "unknown"
+
+    if host_label == ip_address:
+        identifier = ip_address
+    else:
+        identifier = f"{host_label} [{ip_address}]"
+
+    print(
+        f"[info] {identifier}: no open ports reported. "
+        f"Most frequent response: {description}. "
+        f"Re-run without --show-only-open to review all results."
+    )
+
 # -----------------------------------------------------------------------------
 # Preconditions for Scapy-required modes
 # -----------------------------------------------------------------------------
@@ -1068,6 +1106,14 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
             aggregate_open_results.extend(confirmed_open_results_for_host)
             aggregate_all_scan_results.extend(all_results_for_host)
 
+            emit_summary_for_suppressed_results(
+                host_label=target_label_text,
+                ip_address=resolved_ip_address,
+                show_only_open_flag=show_only_open_in_terminal,
+                open_results=confirmed_open_results_for_host,
+                all_results=all_results_for_host,
+            )
+
             if getattr(parsed_arguments, "pcap", None):
                 sniffer_instance, pcap_path = per_host_sniffer_details.get(resolved_ip_address, (None, None))
                 if pcap_path:
@@ -1217,6 +1263,14 @@ def run_test_battery(targets_file: str,
         aggregated_all_results.extend(all_results_for_host)
         any_scan_completed = True
 
+        emit_summary_for_suppressed_results(
+            host_label=target_label_text,
+            ip_address=resolved_ip_address,
+            show_only_open_flag=show_only_open_in_terminal,
+            open_results=open_results_for_host,
+            all_results=all_results_for_host,
+        )
+
     scapy_available = SCAPY_AVAILABLE
     try:
         effective_user_id = os.geteuid()
@@ -1249,6 +1303,14 @@ def run_test_battery(targets_file: str,
             aggregated_all_results.extend(all_results_for_host)
             any_scan_completed = True
 
+            emit_summary_for_suppressed_results(
+                host_label=target_label_text,
+                ip_address=resolved_ip_address,
+                show_only_open_flag=show_only_open_in_terminal,
+                open_results=open_results_for_host,
+                all_results=all_results_for_host,
+            )
+
         for target_label_text in targets_list:
             resolved_ip_address = event_loop.run_until_complete(resolve_dns_label_to_ip(target_label_text))
             if fast_mode_adjustments is not None and not is_external_ip(resolved_ip_address):
@@ -1273,6 +1335,14 @@ def run_test_battery(targets_file: str,
             aggregated_open_results.extend(open_results_for_host)
             aggregated_all_results.extend(all_results_for_host)
             any_scan_completed = True
+
+            emit_summary_for_suppressed_results(
+                host_label=target_label_text,
+                ip_address=resolved_ip_address,
+                show_only_open_flag=show_only_open_in_terminal,
+                open_results=open_results_for_host,
+                all_results=all_results_for_host,
+            )
     else:
         if not scapy_available:
             print("Warning: Scapy not available. Skipping SYN/UDP tests. Install with: pip install scapy")
