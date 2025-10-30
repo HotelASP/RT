@@ -42,6 +42,9 @@ import shlex
 import socket
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple, Any, Set
 
@@ -397,17 +400,40 @@ async def resolve_dns_label_to_ip(dns_label: str) -> str:
 # TCP connect scan using asyncio streams
 # -----------------------------------------------------------------------------
 
-async def try_read_small_banner(stream_reader: asyncio.StreamReader,
-                                timeout_seconds: float,
-                                max_bytes: int = 128) -> str:
-    # Try to read a small banner without blocking too long.
-    try:
-        data = await asyncio.wait_for(stream_reader.read(max_bytes), timeout=timeout_seconds)
-    except Exception:
+async def try_read_banner(stream_reader: asyncio.StreamReader,
+                          idle_timeout_seconds: float,
+                          max_bytes: int = 4096) -> str:
+    """Read as much banner data as possible until the connection goes idle."""
+
+    if idle_timeout_seconds <= 0:
         return ""
-    if not data:
+
+    collected = bytearray()
+    deadline = time.monotonic() + idle_timeout_seconds
+
+    while len(collected) < max_bytes:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            chunk = await asyncio.wait_for(
+                stream_reader.read(max_bytes - len(collected)),
+                timeout=remaining,
+            )
+        except asyncio.TimeoutError:
+            break
+        except Exception:
+            break
+        if not chunk:
+            break
+        collected.extend(chunk)
+        # Extend the deadline so we continue reading while data keeps arriving.
+        deadline = time.monotonic() + idle_timeout_seconds
+
+    if not collected:
         return ""
-    return data.decode("utf-8", errors="replace").strip()
+
+    return collected.decode("utf-8", errors="replace").strip()
 
 async def scan_tcp_connect_once(target_ip: str,
                                 target_port: int,
@@ -437,8 +463,8 @@ async def scan_tcp_connect_once(target_ip: str,
 
     banner_text = ""
     if banner_enabled:
-        banner_timeout = min(timeout_seconds, 0.5)
-        banner_text = await try_read_small_banner(reader, banner_timeout, max_bytes=128)
+        banner_timeout = max(0.5, min(5.0, timeout_seconds * 2))
+        banner_text = await try_read_banner(reader, banner_timeout, max_bytes=4096)
 
     try:
         writer.close()
@@ -871,6 +897,83 @@ def write_results_to_json(json_path: str, result_rows: List[Dict[str, object]]) 
         print(f"Failed to write JSON: {type(exc).__name__}")
 
 # -----------------------------------------------------------------------------
+# Web directory listing helper
+# -----------------------------------------------------------------------------
+
+def run_web_directory_listing_tool(base_url: Optional[str],
+                                   wordlist_path: Optional[str],
+                                   request_timeout: float = 10.0) -> bool:
+    """Run a simple web directory listing enumeration based on a wordlist."""
+
+    if not base_url:
+        print("Error: --url/-u is required when using --web-dir.")
+        return False
+    if not wordlist_path:
+        print("Error: --wordlist/-w is required when using --web-dir.")
+        return False
+    if not os.path.isfile(wordlist_path):
+        print(f"Error: wordlist not found: {wordlist_path}")
+        return False
+
+    normalized_base = base_url.strip()
+    if not normalized_base:
+        print("Error: the provided URL is empty.")
+        return False
+
+    parsed = urllib.parse.urlparse(normalized_base)
+    if not parsed.scheme:
+        normalized_base = f"http://{normalized_base}"
+        parsed = urllib.parse.urlparse(normalized_base)
+    if not parsed.netloc:
+        print(f"Error: invalid URL '{base_url}'.")
+        return False
+
+    base_for_join = normalized_base.rstrip("/") + "/"
+
+    try:
+        with open(wordlist_path, "r", encoding="utf-8", errors="ignore") as handle:
+            for raw_line in handle:
+                candidate = raw_line.strip()
+                if not candidate or candidate.startswith("#"):
+                    continue
+                candidate_path = candidate.lstrip("/")
+                if not candidate_path:
+                    continue
+
+                full_url = urllib.parse.urljoin(base_for_join, candidate_path)
+                display_path = "/" + candidate_path
+                request = urllib.request.Request(
+                    full_url,
+                    method="GET",
+                    headers={"User-Agent": "portscanner-mrib/dirlist"},
+                )
+
+                status_code: Optional[int] = None
+                try:
+                    with urllib.request.urlopen(request, timeout=request_timeout) as response:
+                        status_code = getattr(response, "status", None)
+                        if status_code is None:
+                            status_code = response.getcode()
+                except urllib.error.HTTPError as http_err:
+                    status_code = http_err.code
+                except urllib.error.URLError as url_err:
+                    print(f"[error] {display_path} -> {url_err.reason}")
+                    continue
+                except Exception as exc:
+                    print(f"[error] {display_path} -> {exc}")
+                    continue
+
+                if status_code is None:
+                    print(f"[unknown] {display_path}")
+                else:
+                    print(f"[{status_code}] {display_path}")
+    except Exception as exc:
+        print(f"Error processing wordlist: {exc}")
+        return False
+
+    return True
+
+# -----------------------------------------------------------------------------
 # CLI builder
 # -----------------------------------------------------------------------------
 
@@ -960,8 +1063,10 @@ def build_cli_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--banner",
+        "--show-banner",
         action="store_true",
-        help="Attempt to grab a small banner on TCP connect mode."
+        dest="banner",
+        help="Attempt to grab the most banner data possible on open TCP connect scans."
     )
 
     parser.add_argument(
@@ -1033,6 +1138,24 @@ def build_cli_parser() -> argparse.ArgumentParser:
         help="Run a compact test battery against targets listed in TARGETS_FILE."
     )
     # ---------------------------------------------------------------
+
+    parser.add_argument(
+        "--web-dir",
+        action="store_true",
+        help="Run the web directory listing tool using -u/--url and -w/--wordlist, then exit."
+    )
+
+    parser.add_argument(
+        "-u", "--url",
+        dest="url",
+        help="Base URL for --web-dir mode."
+    )
+
+    parser.add_argument(
+        "-w", "--wordlist",
+        dest="wordlist",
+        help="Wordlist file for --web-dir mode."
+    )
 
     return parser
 
@@ -1451,6 +1574,13 @@ def main() -> None:
     # Parse arguments
     cli_parser = build_cli_parser()
     args = cli_parser.parse_args()
+
+    # Web directory listing mode
+    if getattr(args, "web_dir", False):
+        success = run_web_directory_listing_tool(args.url, args.wordlist)
+        if not success:
+            sys.exit(1)
+        return
 
     # Batch mode: run multiple specs and exit
     if args.test:
