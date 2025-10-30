@@ -156,75 +156,81 @@ def expand_targets_to_list(target_argument: str) -> List[str]:
 # -----------------------------------------------------------------------------
 
 def is_external_ip(ip_text: str) -> bool:
-    """Return True when ip_text represents a global (external) IP address."""
+    # Determine whether the textual IP address represents an address routable on the public internet.
     try:
         ip_obj = ipaddress.ip_address(ip_text)
     except ValueError:
-        # Hostnames or unparsable inputs are treated as potentially external.
+        # Hostnames or unparsable inputs are treated as potentially external so that we do not block them.
         return True
 
-    # Python 3.11 exposes "is_global" for both IPv4/IPv6.
-    is_global = getattr(ip_obj, "is_global", None)
-    if is_global is not None:
-        return bool(is_global)
+    # Python 3.11 exposes "is_global" for both IPv4 and IPv6 objects.
+    is_global_attribute = getattr(ip_obj, "is_global", None)
+    if is_global_attribute is not None:
+        return bool(is_global_attribute)
 
-    # Fallback logic for older interpreters.
+    # Fallback logic for older interpreters relies on individual boolean flags.
     if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast:
         return False
     if getattr(ip_obj, "is_reserved", False):
         return False
     return True
 
-def apply_fast_mode_overrides(args: argparse.Namespace) -> Optional[Dict[str, object]]:
-    """
-    Aggressively tune runtime options when --fast is supplied.
-    Returns metadata describing the applied changes, or None when fast mode is off.
-    """
-    if not getattr(args, "fast", False):
+
+def apply_fast_mode_overrides(parsed_arguments: argparse.Namespace) -> Optional[Dict[str, object]]:
+    # Apply extremely aggressive runtime tuning whenever --fast is supplied.
+    # Returns a dictionary describing the adjustments, or None when fast mode is inactive.
+    if not getattr(parsed_arguments, "fast", False):
         return None
 
-    metadata: Dict[str, object] = {}
+    fast_mode_adjustments: Dict[str, object] = {}
 
-    # Maximise concurrency and disable artificial throttling.
-    args.concurrency = max(int(args.concurrency), 1024)
-    metadata["concurrency"] = args.concurrency
+    requested_concurrency = int(getattr(parsed_arguments, "concurrency", 0))
+    optimized_concurrency = max(requested_concurrency, 4096)
+    parsed_arguments.concurrency = optimized_concurrency
+    fast_mode_adjustments["concurrency"] = optimized_concurrency
 
-    if args.timeout <= 0:
-        args.timeout = 0.05
+    configured_timeout = float(getattr(parsed_arguments, "timeout", 0.0))
+    if configured_timeout <= 0.0:
+        optimized_timeout = 0.04
     else:
-        args.timeout = min(float(args.timeout), 0.15)
-    metadata["timeout"] = args.timeout
+        optimized_timeout = max(0.02, min(configured_timeout, 0.08))
+    parsed_arguments.timeout = optimized_timeout
+    fast_mode_adjustments["timeout"] = optimized_timeout
 
-    args.rate = 0
-    metadata["rate"] = args.rate
+    parsed_arguments.rate = 0
+    fast_mode_adjustments["rate"] = 0
 
-    # Remove optional extras that slow scanning.
-    args.shuffle = True
-    metadata["shuffle"] = True
+    parsed_arguments.shuffle = True
+    fast_mode_adjustments["shuffle"] = True
 
-    args.banner = False
-    metadata["banner"] = False
+    parsed_arguments.banner = False
+    fast_mode_adjustments["banner"] = False
 
-    args.retries = 1
-    metadata["retries"] = args.retries
+    parsed_arguments.retries = 1
+    fast_mode_adjustments["retries"] = 1
 
-    args.retry_backoff = 0.0
-    metadata["retry_backoff"] = args.retry_backoff
+    parsed_arguments.retry_backoff = 0.0
+    fast_mode_adjustments["retry_backoff"] = 0.0
 
-    auto_syn = False
-    if not getattr(args, "udp", False) and not getattr(args, "syn", False) and SCAPY_AVAILABLE:
+    fast_mode_adjustments["includes_private_targets"] = True
+
+    auto_syn_enabled = False
+    if (not getattr(parsed_arguments, "udp", False)
+            and not getattr(parsed_arguments, "syn", False)
+            and SCAPY_AVAILABLE):
         try:
             if os.geteuid() == 0:
-                args.syn = True
-                auto_syn = True
+                parsed_arguments.syn = True
+                auto_syn_enabled = True
         except AttributeError:
-            # Platforms without geteuid(): fall back to connect scans.
-            auto_syn = False
+            auto_syn_enabled = False
 
-    metadata["auto_syn"] = auto_syn
-    metadata["mode"] = "syn" if getattr(args, "syn", False) else ("udp" if getattr(args, "udp", False) else "connect")
+    fast_mode_adjustments["auto_syn"] = auto_syn_enabled
+    fast_mode_adjustments["mode"] = "syn" if getattr(parsed_arguments, "syn", False) else (
+        "udp" if getattr(parsed_arguments, "udp", False) else "connect"
+    )
 
-    return metadata
+    return fast_mode_adjustments
 
 # -----------------------------------------------------------------------------
 # Port list parsing
@@ -876,176 +882,159 @@ def build_cli_parser() -> argparse.ArgumentParser:
 # Helpers to run a full scan using parsed args (single run)
 # -----------------------------------------------------------------------------
 
-def run_full_scan(parsed_args: argparse.Namespace) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
-    """
-    Execute a complete scan flow based on parsed args.
-    Returns (aggregate_confirmed_open, aggregate_all_results).
-    """
-    fast_metadata = apply_fast_mode_overrides(parsed_args)
+def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
+    # Execute a complete scan flow using the parsed arguments and return the aggregated results.
+    fast_mode_adjustments = apply_fast_mode_overrides(parsed_arguments)
 
-    # Compute selected ports
-    selected_ports = parse_port_specification(parsed_args.start, parsed_args.end, parsed_args.ports)
-    if not selected_ports:
+    # Compute the explicit list of ports to probe.
+    ports_selected_for_scan = parse_port_specification(parsed_arguments.start, parsed_arguments.end, parsed_arguments.ports)
+    if not ports_selected_for_scan:
         print("No ports selected.")
         sys.exit(1)
-    if parsed_args.shuffle:
-        random.shuffle(selected_ports)
+    if parsed_arguments.shuffle:
+        random.shuffle(ports_selected_for_scan)
 
-    # Decide scan mode
-    selected_mode = "connect"
-    if parsed_args.syn:
-        selected_mode = "syn"
-    if parsed_args.udp:
-        selected_mode = "udp"
-    if fast_metadata is not None:
-        fast_metadata["mode"] = selected_mode
+    # Decide which scanning strategy to apply.
+    scan_mode_selected = "connect"
+    if parsed_arguments.syn:
+        scan_mode_selected = "syn"
+    if parsed_arguments.udp:
+        scan_mode_selected = "udp"
+    if fast_mode_adjustments is not None:
+        fast_mode_adjustments["mode"] = scan_mode_selected
 
-
-    # PCAP implies Scapy is needed to capture packets
-    if getattr(parsed_args, "pcap", None) and not SCAPY_AVAILABLE:
+    # PCAP implies Scapy must be available to capture packets.
+    if getattr(parsed_arguments, "pcap", None) and not SCAPY_AVAILABLE:
         print("Scapy required for --pcap. Install with: pip install scapy")
         sys.exit(2)
 
-    # Enforce prerequisites for Scapy modes
-    ensure_prerequisites_for_scapy(selected_mode)
+    # Enforce the prerequisites required for SYN or UDP probing.
+    ensure_prerequisites_for_scapy(scan_mode_selected)
 
-    # Expand targets
-    target_labels = expand_targets_to_list(parsed_args.targets)
-    if not target_labels:
+    # Expand the target specification into individual host labels.
+    target_labels_provided_by_user = expand_targets_to_list(parsed_arguments.targets)
+    if not target_labels_provided_by_user:
         print("No targets.")
         sys.exit(1)
 
-    # Resolve AUTO filenames once
-    ts_compact = ts_utc_compact()
-    if parsed_args.csv == "AUTO":
-        parsed_args.csv = f"scan_csv_{ts_compact}.csv"
-    if parsed_args.json == "AUTO":
-        parsed_args.json = f"scan_json_{ts_compact}.json"
+    # Resolve AUTO filenames only once per run so that outputs are predictable.
+    timestamp_for_auto_files = ts_utc_compact()
+    if parsed_arguments.csv == "AUTO":
+        parsed_arguments.csv = f"scan_csv_{timestamp_for_auto_files}.csv"
+    if parsed_arguments.json == "AUTO":
+        parsed_arguments.json = f"scan_json_{timestamp_for_auto_files}.json"
 
-    # For PCAP: naming
-    if parsed_args.pcap == "AUTO":
-        parsed_args.pcap = f"scan_pcap_{ts_compact}"
+    if parsed_arguments.pcap == "AUTO":
+        parsed_arguments.pcap = f"scan_pcap_{timestamp_for_auto_files}"
 
-    # Header
+    # Provide the operator with a concise overview of the run parameters.
     print("*** PORT SCANNER MRIB ***")
     print("")
     print(
         f"SCAN start={utc_now_str()} "
-        f"mode={selected_mode} "
-        f"targets={len(target_labels)} "
-        f"ports={len(selected_ports)} "
-        f"concurrency={parsed_args.concurrency} "
-        f"timeout={parsed_args.timeout}s "
-        f"rate={parsed_args.rate}/s"
+        f"mode={scan_mode_selected} "
+        f"targets={len(target_labels_provided_by_user)} "
+        f"ports={len(ports_selected_for_scan)} "
+        f"concurrency={parsed_arguments.concurrency} "
+        f"timeout={parsed_arguments.timeout}s "
+        f"rate={parsed_arguments.rate}/s"
     )
-    if fast_metadata is not None:
-        rate_desc = "off" if parsed_args.rate <= 0 else f"{parsed_args.rate}/s"
-        shuffle_state = "on" if parsed_args.shuffle else "off"
-        banner_state = "on" if parsed_args.banner else "off"
-        auto_syn_note = " (auto-selected SYN)" if fast_metadata.get("auto_syn") else ""
+    if fast_mode_adjustments is not None:
+        rate_description = "off" if parsed_arguments.rate <= 0 else f"{parsed_arguments.rate}/s"
+        shuffle_state_description = "on" if parsed_arguments.shuffle else "off"
+        banner_state_description = "on" if parsed_arguments.banner else "off"
+        auto_syn_message = " (auto-selected SYN)" if fast_mode_adjustments.get("auto_syn") else ""
         print(
-            f"[fast]{auto_syn_note} mode={selected_mode} "
-            f"concurrency={parsed_args.concurrency} timeout={parsed_args.timeout}s "
-            f"rate-limit={rate_desc} shuffle={shuffle_state} banner={banner_state} "
-            f"retries={parsed_args.retries} backoff={parsed_args.retry_backoff}s"
+            f"[fast]{auto_syn_message} mode={scan_mode_selected} "
+            f"concurrency={parsed_arguments.concurrency} timeout={parsed_arguments.timeout}s "
+            f"rate-limit={rate_description} shuffle={shuffle_state_description} banner={banner_state_description} "
+            f"retries={parsed_arguments.retries} backoff={parsed_arguments.retry_backoff}s"
         )
-        print("[fast] Non-external targets will be skipped automatically.")
+        print("[fast] Private and internal networks are included automatically.")
     print("")
 
-    aggregate_confirmed_open: List[Dict[str, object]] = []
-    aggregate_all_results: List[Dict[str, object]] = []
-    scanned_any_target = False
+    aggregate_open_results: List[Dict[str, object]] = []
+    aggregate_all_scan_results: List[Dict[str, object]] = []
+    has_scanned_at_least_one_target = False
 
-    # Orchestration loop
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(event_loop)
 
-        # Track sniffers per resolved host when --pcap is enabled
-        host_sniffers: Dict[str, Tuple[Any, str]] = {}
+        per_host_sniffer_details: Dict[str, Tuple[Any, str]] = {}
 
-        for label in target_labels:
-            resolved_ip = loop.run_until_complete(resolve_dns_label_to_ip(label))
-            if fast_metadata is not None and not is_external_ip(resolved_ip):
-                print(f"[fast] Skipping non-external target {label} [{resolved_ip}]")
-                print("")
-                continue
-            # Verbose domain to IP line for readability
-            if label != resolved_ip:
-                print(f"Targeting DOMAIN {label} [{resolved_ip}]")
+        for target_label_text in target_labels_provided_by_user:
+            resolved_ip_address = event_loop.run_until_complete(resolve_dns_label_to_ip(target_label_text))
+            if fast_mode_adjustments is not None and not is_external_ip(resolved_ip_address):
+                print(f"[fast] Target {target_label_text} [{resolved_ip_address}] identified as private/internal and will be scanned.")
+            if target_label_text != resolved_ip_address:
+                print(f"Targeting DOMAIN {target_label_text} [{resolved_ip_address}]")
             else:
-                print(f"TARGET {label} -> {resolved_ip}")
-            scanned_any_target = True
+                print(f"TARGET {target_label_text} -> {resolved_ip_address}")
+            has_scanned_at_least_one_target = True
             print("")
 
-            # Start PCAP sniffer if requested
-            if getattr(parsed_args, "pcap", None):
-                if len(target_labels) == 1 and str(parsed_args.pcap).lower().endswith(".pcap"):
-                    pcap_filename = parsed_args.pcap
+            if getattr(parsed_arguments, "pcap", None):
+                if len(target_labels_provided_by_user) == 1 and str(parsed_arguments.pcap).lower().endswith(".pcap"):
+                    pcap_filename_for_host = parsed_arguments.pcap
                 else:
-                    base = parsed_args.pcap[:-5] if str(parsed_args.pcap).lower().endswith(".pcap") else parsed_args.pcap
-                    pcap_filename = f"{base}.{resolved_ip}.pcap" if len(target_labels) > 1 else f"{base}.pcap"
-                sniffer = start_pcap_sniffer_for_host(filter_expression=f"host {resolved_ip}")
-                if sniffer is None:
-                    print("Warning: could not start packet sniffer for host", resolved_ip)
-                host_sniffers[resolved_ip] = (sniffer, pcap_filename)
+                    base_name = parsed_arguments.pcap[:-5] if str(parsed_arguments.pcap).lower().endswith(".pcap") else parsed_arguments.pcap
+                    pcap_filename_for_host = f"{base_name}.{resolved_ip_address}.pcap" if len(target_labels_provided_by_user) > 1 else f"{base_name}.pcap"
+                sniffer_instance = start_pcap_sniffer_for_host(filter_expression=f"host {resolved_ip_address}")
+                if sniffer_instance is None:
+                    print("Warning: could not start packet sniffer for host", resolved_ip_address)
+                per_host_sniffer_details[resolved_ip_address] = (sniffer_instance, pcap_filename_for_host)
 
-            # Run the host scan and gather results
-            open_for_host, all_for_host = loop.run_until_complete(
+            confirmed_open_results_for_host, all_results_for_host = event_loop.run_until_complete(
                 scan_all_selected_ports_for_host(
-                    target_ip=resolved_ip,
-                    selected_ports=selected_ports,
-                    selected_mode=selected_mode,
-                    timeout_seconds=parsed_args.timeout,
-                    max_concurrency=parsed_args.concurrency,
-                    show_closed_in_output=parsed_args.show_closed,
-                    banner_enabled=parsed_args.banner,
-                    per_host_ops_per_sec=parsed_args.rate,
-                    udp_probe_kind=parsed_args.udp_probe,
-                    retries=max(1, parsed_args.retries),
-                    backoff_seconds=max(0.0, parsed_args.retry_backoff),
+                    target_ip=resolved_ip_address,
+                    selected_ports=ports_selected_for_scan,
+                    selected_mode=scan_mode_selected,
+                    timeout_seconds=parsed_arguments.timeout,
+                    max_concurrency=parsed_arguments.concurrency,
+                    show_closed_in_output=parsed_arguments.show_closed,
+                    banner_enabled=parsed_arguments.banner,
+                    per_host_ops_per_sec=parsed_arguments.rate,
+                    udp_probe_kind=parsed_arguments.udp_probe,
+                    retries=max(1, parsed_arguments.retries),
+                    backoff_seconds=max(0.0, parsed_arguments.retry_backoff),
                 )
             )
 
-            aggregate_confirmed_open.extend(open_for_host)
-            aggregate_all_results.extend(all_for_host)
+            aggregate_open_results.extend(confirmed_open_results_for_host)
+            aggregate_all_scan_results.extend(all_results_for_host)
 
-            # Stop sniffer and write PCAP file for this host if enabled
-            if getattr(parsed_args, "pcap", None):
-                sniffer, pcap_path = host_sniffers.get(resolved_ip, (None, None))
+            if getattr(parsed_arguments, "pcap", None):
+                sniffer_instance, pcap_path = per_host_sniffer_details.get(resolved_ip_address, (None, None))
                 if pcap_path:
-                    stop_sniffer_and_write_pcap(sniffer, pcap_path)
+                    stop_sniffer_and_write_pcap(sniffer_instance, pcap_path)
                     print(f"pcap -> {pcap_path}")
 
-        if fast_metadata is not None and not scanned_any_target:
-            print("[fast] No external targets remained after filtering.")
+        if fast_mode_adjustments is not None and not has_scanned_at_least_one_target:
+            print("[fast] No targets were scanned. Verify the supplied targets list.")
 
-        loop.close()
+        event_loop.close()
 
     except KeyboardInterrupt:
         print("Interrupted.")
         sys.exit(130)
 
-    # Footer and persistence
     print("")
-    print(f"SCAN end={utc_now_str()} open_found={len(aggregate_confirmed_open)}")
+    print(f"SCAN end={utc_now_str()} open_found={len(aggregate_open_results)}")
 
-    # Decide which collection to persist
     rows_for_persistence: List[Dict[str, object]]
-    if parsed_args.show_closed:
-        rows_for_persistence = aggregate_all_results
+    if parsed_arguments.show_closed:
+        rows_for_persistence = aggregate_all_scan_results
     else:
-        rows_for_persistence = aggregate_confirmed_open
+        rows_for_persistence = aggregate_open_results
 
-    # Write CSV if requested
-    if parsed_args.csv:
-        write_results_to_csv(parsed_args.csv, rows_for_persistence)
+    if parsed_arguments.csv:
+        write_results_to_csv(parsed_arguments.csv, rows_for_persistence)
 
-    # Write JSON if requested
-    if parsed_args.json:
-        write_results_to_json(parsed_args.json, rows_for_persistence)
+    if parsed_arguments.json:
+        write_results_to_json(parsed_arguments.json, rows_for_persistence)
 
-    return aggregate_confirmed_open, aggregate_all_results
+    return aggregate_open_results, aggregate_all_scan_results
 
 # -----------------------------------------------------------------------------
 # Batch mode: parse and run multiple CLI specs from a file
@@ -1098,154 +1087,135 @@ def run_batch_from_file(spec_file: str) -> None:
 # -----------------------------------------------------------------------------
 
 def run_test_battery(targets_file: str,
-                     base_args: argparse.Namespace) -> None:
+                     base_arguments: argparse.Namespace) -> None:
 
-    #Execute a compact test battery for targets in 'targets_file':
-
-    targets = read_targets_from_file(targets_file)
-    if not targets:
+    # Execute a compact test battery for each target listed in targets_file.
+    targets_list = read_targets_from_file(targets_file)
+    if not targets_list:
         print("No targets found in test file.")
         return
 
-    fast_metadata = apply_fast_mode_overrides(base_args)
-    if fast_metadata is not None:
-        rate_desc = "off" if base_args.rate <= 0 else f"{base_args.rate}/s"
+    fast_mode_adjustments = apply_fast_mode_overrides(base_arguments)
+    if fast_mode_adjustments is not None:
+        rate_description = "off" if base_arguments.rate <= 0 else f"{base_arguments.rate}/s"
         print(
-            f"[fast] Test battery mode: concurrency={base_args.concurrency} "
-            f"timeout={base_args.timeout}s rate-limit={rate_desc} "
-            f"shuffle={'on' if base_args.shuffle else 'off'} banner={'on' if base_args.banner else 'off'}"
+            f"[fast] Test battery mode: concurrency={base_arguments.concurrency} "
+            f"timeout={base_arguments.timeout}s rate-limit={rate_description} "
+            f"shuffle={'on' if base_arguments.shuffle else 'off'} banner={'on' if base_arguments.banner else 'off'}"
         )
+        print("[fast] Private and internal networks are included automatically during the battery.")
 
     test_ports_connect = [21, 22, 80, 443]
     test_ports_syn = [21, 22, 80, 443]
     test_ports_udp = [53]
 
-    agg_open: List[Dict[str, object]] = []
-    agg_all: List[Dict[str, object]] = []
-    scanned_any = False
-    skipped_targets: Set[str] = set()
+    aggregated_open_results: List[Dict[str, object]] = []
+    aggregated_all_results: List[Dict[str, object]] = []
+    any_scan_completed = False
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    event_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(event_loop)
 
-    # Connect scans (always)
-    for label in targets:
-        resolved_ip = loop.run_until_complete(resolve_dns_label_to_ip(label))
-        skip_key = f"{label}|{resolved_ip}"
-        if fast_metadata is not None and not is_external_ip(resolved_ip):
-            if skip_key not in skipped_targets:
-                print(f"[fast] Skipping non-external target {label} [{resolved_ip}]")
-                skipped_targets.add(skip_key)
-            continue
-        print(f"[TEST] TARGET {label} -> {resolved_ip}")
-        open_for_host, all_for_host = loop.run_until_complete(
+    for target_label_text in targets_list:
+        resolved_ip_address = event_loop.run_until_complete(resolve_dns_label_to_ip(target_label_text))
+        if fast_mode_adjustments is not None and not is_external_ip(resolved_ip_address):
+            print(f"[fast] Target {target_label_text} [{resolved_ip_address}] identified as private/internal and will be scanned in test mode.")
+        print(f"[TEST] TARGET {target_label_text} -> {resolved_ip_address}")
+        open_results_for_host, all_results_for_host = event_loop.run_until_complete(
             scan_all_selected_ports_for_host(
-                target_ip=resolved_ip,
+                target_ip=resolved_ip_address,
                 selected_ports=test_ports_connect,
                 selected_mode="connect",
-                timeout_seconds=base_args.timeout,
-                max_concurrency=base_args.concurrency,
-                show_closed_in_output=base_args.show_closed,
-                banner_enabled=base_args.banner,
-                per_host_ops_per_sec=base_args.rate,
-                udp_probe_kind=base_args.udp_probe,
-                retries=max(1, base_args.retries),
-                backoff_seconds=max(0.0, base_args.retry_backoff),
+                timeout_seconds=base_arguments.timeout,
+                max_concurrency=base_arguments.concurrency,
+                show_closed_in_output=base_arguments.show_closed,
+                banner_enabled=base_arguments.banner,
+                per_host_ops_per_sec=base_arguments.rate,
+                udp_probe_kind=base_arguments.udp_probe,
+                retries=max(1, base_arguments.retries),
+                backoff_seconds=max(0.0, base_arguments.retry_backoff),
             )
         )
-        agg_open.extend(open_for_host)
-        agg_all.extend(all_for_host)
-        scanned_any = True
+        aggregated_open_results.extend(open_results_for_host)
+        aggregated_all_results.extend(all_results_for_host)
+        any_scan_completed = True
 
-    # Scapy-dependent tests
-    scapy_ok = SCAPY_AVAILABLE
+    scapy_available = SCAPY_AVAILABLE
     try:
-        euid = os.geteuid()
+        effective_user_id = os.geteuid()
     except AttributeError:
-        euid = None
+        effective_user_id = None
 
-    if scapy_ok and euid == 0:
-        # SYN scans
-        for label in targets:
-            resolved_ip = loop.run_until_complete(resolve_dns_label_to_ip(label))
-            skip_key = f"{label}|{resolved_ip}"
-            if fast_metadata is not None and not is_external_ip(resolved_ip):
-                if skip_key not in skipped_targets:
-                    print(f"[fast] Skipping non-external target {label} [{resolved_ip}]")
-                    skipped_targets.add(skip_key)
-                continue
-            print(f"[TEST] SYN-target {label} -> {resolved_ip}")
-            open_for_host, all_for_host = loop.run_until_complete(
+    if scapy_available and effective_user_id == 0:
+        for target_label_text in targets_list:
+            resolved_ip_address = event_loop.run_until_complete(resolve_dns_label_to_ip(target_label_text))
+            if fast_mode_adjustments is not None and not is_external_ip(resolved_ip_address):
+                print(f"[fast] Target {target_label_text} [{resolved_ip_address}] identified as private/internal and will be scanned in SYN mode.")
+            print(f"[TEST] SYN-target {target_label_text} -> {resolved_ip_address}")
+            open_results_for_host, all_results_for_host = event_loop.run_until_complete(
                 scan_all_selected_ports_for_host(
-                    target_ip=resolved_ip,
+                    target_ip=resolved_ip_address,
                     selected_ports=test_ports_syn,
                     selected_mode="syn",
-                    timeout_seconds=base_args.timeout,
-                    max_concurrency=base_args.concurrency,
-                    show_closed_in_output=base_args.show_closed,
+                    timeout_seconds=base_arguments.timeout,
+                    max_concurrency=base_arguments.concurrency,
+                    show_closed_in_output=base_arguments.show_closed,
                     banner_enabled=False,
-                    per_host_ops_per_sec=base_args.rate,
-                    udp_probe_kind=base_args.udp_probe,
-                    retries=max(1, base_args.retries),
-                    backoff_seconds=max(0.0, base_args.retry_backoff),
+                    per_host_ops_per_sec=base_arguments.rate,
+                    udp_probe_kind=base_arguments.udp_probe,
+                    retries=max(1, base_arguments.retries),
+                    backoff_seconds=max(0.0, base_arguments.retry_backoff),
                 )
             )
-            agg_open.extend(open_for_host)
-            agg_all.extend(all_for_host)
-            scanned_any = True
+            aggregated_open_results.extend(open_results_for_host)
+            aggregated_all_results.extend(all_results_for_host)
+            any_scan_completed = True
 
-        # UDP DNS probes
-        for label in targets:
-            resolved_ip = loop.run_until_complete(resolve_dns_label_to_ip(label))
-            skip_key = f"{label}|{resolved_ip}"
-            if fast_metadata is not None and not is_external_ip(resolved_ip):
-                if skip_key not in skipped_targets:
-                    print(f"[fast] Skipping non-external target {label} [{resolved_ip}]")
-                    skipped_targets.add(skip_key)
-                continue
-            print(f"[TEST] UDP-target {label} -> {resolved_ip}")
-            open_for_host, all_for_host = loop.run_until_complete(
+        for target_label_text in targets_list:
+            resolved_ip_address = event_loop.run_until_complete(resolve_dns_label_to_ip(target_label_text))
+            if fast_mode_adjustments is not None and not is_external_ip(resolved_ip_address):
+                print(f"[fast] Target {target_label_text} [{resolved_ip_address}] identified as private/internal and will be scanned in UDP mode.")
+            print(f"[TEST] UDP-target {target_label_text} -> {resolved_ip_address}")
+            open_results_for_host, all_results_for_host = event_loop.run_until_complete(
                 scan_all_selected_ports_for_host(
-                    target_ip=resolved_ip,
+                    target_ip=resolved_ip_address,
                     selected_ports=test_ports_udp,
                     selected_mode="udp",
-                    timeout_seconds=base_args.timeout,
-                    max_concurrency=base_args.concurrency,
-                    show_closed_in_output=base_args.show_closed,
+                    timeout_seconds=base_arguments.timeout,
+                    max_concurrency=base_arguments.concurrency,
+                    show_closed_in_output=base_arguments.show_closed,
                     banner_enabled=False,
-                    per_host_ops_per_sec=base_args.rate,
+                    per_host_ops_per_sec=base_arguments.rate,
                     udp_probe_kind="dns",
-                    retries=max(1, base_args.retries),
-                    backoff_seconds=max(0.0, base_args.retry_backoff),
+                    retries=max(1, base_arguments.retries),
+                    backoff_seconds=max(0.0, base_arguments.retry_backoff),
                 )
             )
-            agg_open.extend(open_for_host)
-            agg_all.extend(all_for_host)
-            scanned_any = True
+            aggregated_open_results.extend(open_results_for_host)
+            aggregated_all_results.extend(all_results_for_host)
+            any_scan_completed = True
     else:
-        if not scapy_ok:
+        if not scapy_available:
             print("Warning: Scapy not available. Skipping SYN/UDP tests. Install with: pip install scapy")
-        elif euid != 0:
+        elif effective_user_id != 0:
             print("Warning: Not running as root. Skipping SYN/UDP tests.")
 
-    if fast_metadata is not None and not scanned_any:
-        print("[fast] No external targets remained after filtering.")
+    if fast_mode_adjustments is not None and not any_scan_completed:
+        print("[fast] No targets were scanned during the battery. Verify the supplied list.")
 
-    loop.close()
+    event_loop.close()
 
-    # Persistence decision same as normal run
-    rows_for_persistence = agg_all if base_args.show_closed else agg_open
+    rows_for_persistence = aggregated_all_results if base_arguments.show_closed else aggregated_open_results
 
-    # Auto filenames if requested with bare --csv/--json
-    ts_compact = ts_utc_compact()
-    if base_args.csv:
-        csvname = base_args.csv if base_args.csv != "AUTO" else f"test_csv_{ts_compact}.csv"
-        write_results_to_csv(csvname, rows_for_persistence)
-    if base_args.json:
-        jsonname = base_args.json if base_args.json != "AUTO" else f"test_json_{ts_compact}.json"
-        write_results_to_json(jsonname, rows_for_persistence)
+    timestamp_for_auto_files = ts_utc_compact()
+    if base_arguments.csv:
+        csv_filename = base_arguments.csv if base_arguments.csv != "AUTO" else f"test_csv_{timestamp_for_auto_files}.csv"
+        write_results_to_csv(csv_filename, rows_for_persistence)
+    if base_arguments.json:
+        json_filename = base_arguments.json if base_arguments.json != "AUTO" else f"test_json_{timestamp_for_auto_files}.json"
+        write_results_to_json(json_filename, rows_for_persistence)
 
-    print(f"TEST end={utc_now_str()} open_found={len(agg_open)}")
+    print(f"TEST end={utc_now_str()} open_found={len(aggregated_open_results)}")
 
 # -----------------------------------------------------------------------------
 # Main entry point
