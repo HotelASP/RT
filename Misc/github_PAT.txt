@@ -1,0 +1,35 @@
+# *** FLAGS TCP ***
+# SYN = inicia conexão (0x02)
+# ACK = reconhecimento (0x10)
+# RST = reset (abort) (0x04)
+# FIN = fim de envio (0x01)
+# PSH = push (dados imediatos) (0x08)
+# URG = urgente (0x20)
+# ECE = Explicit Congestion (0x40)
+# CWR = Congestion Window Reduced (0x80)
+# Comuns combinados:
+# SYN (0x02)
+# SYN,ACK (0x12)
+# RST,ACK (0x14)
+# FIN,ACK (0x11)
+# ACK só (0x10) — pacote normal de dados/ack.
+# *** ESTADOS TCP ***
+# CLOSED — sem socket
+# LISTEN — servidor espera SYN
+# SYN-SENT — cliente enviou SYN, espera SYN/ACK
+# SYN-RECEIVED — recebeu SYN, respondeu SYN/ACK, espera ACK
+# ESTABLISHED — conexão aberta, troca de dados
+# FIN-WAIT-1 — iniciou fechamento (envia FIN)
+# FIN-WAIT-2 — aguardando FIN remoto
+# CLOSING — ambos fecharam quase simultâneo
+# TIME-WAIT — espera para garantir fim seguro (2×MSL)
+# CLOSE-WAIT — recebeu FIN, esperando app fechar
+# LAST-ACK — enviou FIN, espera ACK final
+
+
+
+
+
+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
+
+
