@@ -190,7 +190,7 @@ def apply_fast_mode_overrides(parsed_arguments: argparse.Namespace) -> Optional[
     fast_mode_adjustments: Dict[str, object] = {}
 
     requested_concurrency = int(getattr(parsed_arguments, "concurrency", 0))
-    optimized_concurrency = max(requested_concurrency, 4096)
+    optimized_concurrency = max(requested_concurrency, 1024)
     parsed_arguments.concurrency = optimized_concurrency
     fast_mode_adjustments["concurrency"] = optimized_concurrency
 
@@ -220,15 +220,8 @@ def apply_fast_mode_overrides(parsed_arguments: argparse.Namespace) -> Optional[
     fast_mode_adjustments["includes_private_targets"] = True
 
     auto_syn_enabled = False
-    if (not getattr(parsed_arguments, "udp", False)
-            and not getattr(parsed_arguments, "syn", False)
-            and SCAPY_AVAILABLE):
-        try:
-            if os.geteuid() == 0:
-                parsed_arguments.syn = True
-                auto_syn_enabled = True
-        except AttributeError:
-            auto_syn_enabled = False
+    if getattr(parsed_arguments, "syn", False):
+        auto_syn_enabled = True
 
     fast_mode_adjustments["auto_syn"] = auto_syn_enabled
     fast_mode_adjustments["mode"] = "syn" if getattr(parsed_arguments, "syn", False) else (
