@@ -22,15 +22,15 @@
 #    Outcome: verifies NTP listener availability, persisting responses into a CSV report.
 #
 # 5. Fast mode acceleration with shuffled ports and automatic adjustments.
-#    Command: python3 smrib.py --targets prod.edge --ports "22,80,443,9000-9005" --fast --show-closed --json fast_profile.json
+#    Command: python3 smrib.py --targets prod.edge --ports "22,80,443,9000-9005" --fast --show-closed-terminal --json fast_profile.json
 #    Outcome: enforces aggressive timeouts, disables banners, randomizes port order, and exports a JSON summary including closed ports.
 #
 # 6. Batch-driven multi-run execution from specification file.
-#    Command: python3 smrib.py --test runspec.txt
+#    Command: python3 smrib.py --batch runspec.txt
 #    Outcome: iterates through each valid CLI line inside runspec.txt, executing scans sequentially.
 #
 # 7. Compact diagnostic battery against a list of endpoints.
-#    Command: python3 smrib.py --test-battery diagnostics.txt --csv diagnostics.csv --json diagnostics.json
+#    Command: python3 smrib.py --batch-batter diagnostics.txt --csv diagnostics.csv --json diagnostics.json
 #    Outcome: conducts TCP connect, SYN, and UDP checks where permitted, consolidating the diagnostic results.
 #
 # 8. Web directory listing helper using HTTP wordlists.
@@ -925,13 +925,13 @@ def build_cli_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--show-closed",
+        "--show-closed-terminal",
         action="store_true",
         help="Also print CLOSED results and persist ALL results to CSV/JSON."
     )
 
     parser.add_argument(
-        "--show-closed-terminal",
+        "--show-closed-terminal-only",
         action="store_true",
         help="Print CLOSED results in the terminal without persisting them."
     )
@@ -1013,14 +1013,14 @@ def build_cli_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--test",
+        "--batch",
         metavar="SPECFILE",
         help="Batch mode. SPECFILE has one full CLI spec per non-comment line. Prefix before first '-' is ignored."
     )
     parser.add_argument(
-        "--test-battery",
+        "--batch-batter",
         metavar="TARGETS_FILE",
-        dest="test_battery",
+        dest="batch_batter",
         help="Run a compact test battery against targets listed in TARGETS_FILE."
     )
 
@@ -1049,7 +1049,8 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
 
     fast_mode_adjustments = apply_fast_mode_overrides(parsed_arguments)
     show_closed_in_terminal = bool(
-        parsed_arguments.show_closed or getattr(parsed_arguments, "show_closed_terminal", False)
+        parsed_arguments.show_closed_terminal
+        or getattr(parsed_arguments, "show_closed_terminal_only", False)
     )
     show_only_open_in_terminal = bool(getattr(parsed_arguments, "show_only_open", False))
 
@@ -1205,7 +1206,7 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
     print(f"SCAN end={utc_now_str()} open_found={len(aggregate_open_results)}")
 
     rows_for_persistence: List[Dict[str, object]]
-    if parsed_arguments.show_closed:
+    if parsed_arguments.show_closed_terminal:
         rows_for_persistence = aggregate_all_scan_results
     else:
         rows_for_persistence = aggregate_open_results
@@ -1256,7 +1257,7 @@ def run_batch_from_file(spec_file: str) -> None:
             run_full_scan(args)
 
 # [AUTO]Execute a compact verification suite against provided targets.
-def run_test_battery(targets_file: str,
+def run_batch_batter(targets_file: str,
                      base_arguments: argparse.Namespace) -> None:
 
     targets_list = read_targets_from_file(targets_file)
@@ -1266,7 +1267,8 @@ def run_test_battery(targets_file: str,
 
     fast_mode_adjustments = apply_fast_mode_overrides(base_arguments)
     show_closed_in_terminal = bool(
-        base_arguments.show_closed or getattr(base_arguments, "show_closed_terminal", False)
+        base_arguments.show_closed_terminal
+        or getattr(base_arguments, "show_closed_terminal_only", False)
     )
     show_only_open_in_terminal = bool(getattr(base_arguments, "show_only_open", False))
     if fast_mode_adjustments is not None:
@@ -1415,7 +1417,9 @@ def run_test_battery(targets_file: str,
 
     event_loop.close()
 
-    rows_for_persistence = aggregated_all_results if base_arguments.show_closed else aggregated_open_results
+    rows_for_persistence = (
+        aggregated_all_results if base_arguments.show_closed_terminal else aggregated_open_results
+    )
 
     timestamp_for_auto_files = ts_utc_compact()
     if base_arguments.csv:
@@ -1439,12 +1443,12 @@ def main() -> None:
             sys.exit(1)
         return
 
-    if args.test:
-        run_batch_from_file(args.test)
+    if args.batch:
+        run_batch_from_file(args.batch)
         return
 
-    if args.test_battery:
-        run_test_battery(args.test_battery, args)
+    if args.batch_batter:
+        run_batch_batter(args.batch_batter, args)
         return
 
     run_full_scan(args)
