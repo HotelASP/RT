@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import csv
 import ipaddress
 import json
@@ -100,6 +101,9 @@ DEFAULTS: Dict[str, object] = {
     "TIMEOUT": float(os.environ.get("PORTSCAN_TIMEOUT", "0.3")),
     "RATE": int(os.environ.get("PORTSCAN_RATE", "0")),  # 0 disables rate limiting
 }
+
+# Upper bound for Scapy-driven modes to prevent resource exhaustion.
+SCAPY_CONCURRENCY_LIMIT: int = max(1, int(os.environ.get("PORTSCAN_SCAPY_MAX_CONCURRENCY", "256")))
 
 # -----------------------------------------------------------------------------
 # Time and formatting helpers
@@ -232,6 +236,15 @@ def apply_fast_mode_overrides(parsed_arguments: argparse.Namespace) -> Optional[
     )
 
     return fast_mode_adjustments
+
+
+def normalize_concurrency_for_mode(requested_concurrency: int, selected_mode: str) -> Tuple[int, Optional[int]]:
+    # Clamp user-supplied concurrency to safe limits depending on the scan mode.
+    sanitized_concurrency = max(1, int(requested_concurrency))
+    if selected_mode in ("syn", "udp"):
+        if sanitized_concurrency > SCAPY_CONCURRENCY_LIMIT:
+            return SCAPY_CONCURRENCY_LIMIT, sanitized_concurrency
+    return sanitized_concurrency, None
 
 # -----------------------------------------------------------------------------
 # Port list parsing
@@ -397,7 +410,8 @@ async def scan_tcp_syn_once(target_ip: str,
                             target_port: int,
                             timeout_seconds: float,
                             retries: int,
-                            backoff_seconds: float) -> Tuple[str, int, str, str, str, int]:
+                            backoff_seconds: float,
+                            executor: Optional[ThreadPoolExecutor] = None) -> Tuple[str, int, str, str, str, int]:
     # Perform a TCP SYN probe with retries run in a thread executor.
     loop = asyncio.get_running_loop()
     attempt_index = 1
@@ -407,7 +421,7 @@ async def scan_tcp_syn_once(target_ip: str,
     while attempt_index <= max(1, retries):
         try:
             status, note = await loop.run_in_executor(
-                None,
+                executor,
                 scapy_send_single_syn,
                 target_ip,
                 target_port,
@@ -503,7 +517,8 @@ async def scan_udp_once(target_ip: str,
                         timeout_seconds: float,
                         probe_kind: str,
                         retries: int,
-                        backoff_seconds: float) -> Tuple[str, int, str, str, str, int]:
+                        backoff_seconds: float,
+                        executor: Optional[ThreadPoolExecutor] = None) -> Tuple[str, int, str, str, str, int]:
     # Perform a UDP probe with retries run in a thread executor.
     loop = asyncio.get_running_loop()
     attempt_index = 1
@@ -513,7 +528,7 @@ async def scan_udp_once(target_ip: str,
     while attempt_index <= max(1, retries):
         try:
             status, note = await loop.run_in_executor(
-                None,
+                executor,
                 scapy_udp_probe_sniff_once,
                 target_ip,
                 target_port,
@@ -579,7 +594,14 @@ async def scan_all_selected_ports_for_host(target_ip: str,
     #   - If show_closed_in_output is True, also print "closed".
     # Persistence behavior is handled by the caller based on the same flag.
 
-    semaphore = asyncio.Semaphore(max(1, max_concurrency))
+    effective_concurrency = max(1, max_concurrency)
+    scapy_executor: Optional[ThreadPoolExecutor] = None
+    if selected_mode in ("syn", "udp"):
+        if effective_concurrency > SCAPY_CONCURRENCY_LIMIT:
+            effective_concurrency = SCAPY_CONCURRENCY_LIMIT
+        scapy_executor = ThreadPoolExecutor(max_workers=effective_concurrency)
+
+    semaphore = asyncio.Semaphore(effective_concurrency)
     limiter = FixedRateLimiter(per_host_ops_per_sec)
 
     confirmed_open_results: List[Dict[str, object]] = []
@@ -602,7 +624,8 @@ async def scan_all_selected_ports_for_host(target_ip: str,
                     port_number,
                     timeout_seconds,
                     retries,
-                    backoff_seconds
+                    backoff_seconds,
+                    scapy_executor
                 )
             if selected_mode == "udp":
                 return await scan_udp_once(
@@ -611,39 +634,44 @@ async def scan_all_selected_ports_for_host(target_ip: str,
                     timeout_seconds,
                     udp_probe_kind,
                     retries,
-                    backoff_seconds
+                    backoff_seconds,
+                    scapy_executor
                 )
             return target_ip, port_number, "tcp", "error", "unknown-mode", 0
 
     tasks: List[asyncio.Task] = [asyncio.create_task(run_one_port_probe(p)) for p in selected_ports]
 
-    for finished in asyncio.as_completed(tasks):
-        host, port, proto, status, note, duration_ms = await finished
-        timestamp = utc_now_str()
+    try:
+        for finished in asyncio.as_completed(tasks):
+            host, port, proto, status, note, duration_ms = await finished
+            timestamp = utc_now_str()
 
-        # Decide whether to print this line based on --show-closed
-        # We print all results when show_closed_in_output is True
-        # Otherwise, print everything except "closed"
-        should_print = show_closed_in_output or (status != "closed")
-        if should_print:
-            note_suffix = f" {note}" if note else ""
-            print(f"# {timestamp}\t| {host}:{port}/{proto}\t= {status}{note_suffix} [{duration_ms}ms]")
+            # Decide whether to print this line based on --show-closed
+            # We print all results when show_closed_in_output is True
+            # Otherwise, print everything except "closed"
+            should_print = show_closed_in_output or (status != "closed")
+            if should_print:
+                note_suffix = f" {note}" if note else ""
+                print(f"# {timestamp}\t| {host}:{port}/{proto}\t= {status}{note_suffix} [{duration_ms}ms]")
 
-        # Persist a record for "all results"
-        record: Dict[str, object] = {
-            "host": host,
-            "port": port,
-            "proto": proto,
-            "status": status,
-            "note": note,
-            "time": timestamp,
-            "duration_ms": duration_ms,
-        }
-        all_results_for_host.append(record)
+            # Persist a record for "all results"
+            record: Dict[str, object] = {
+                "host": host,
+                "port": port,
+                "proto": proto,
+                "status": status,
+                "note": note,
+                "time": timestamp,
+                "duration_ms": duration_ms,
+            }
+            all_results_for_host.append(record)
 
-        # Persist a record for "confirmed open results" only when status == "open"
-        if status == "open":
-            confirmed_open_results.append(record)
+            # Persist a record for "confirmed open results" only when status == "open"
+            if status == "open":
+                confirmed_open_results.append(record)
+    finally:
+        if scapy_executor is not None:
+            scapy_executor.shutdown(wait=True)
 
     return confirmed_open_results, all_results_for_host
 
@@ -904,6 +932,16 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
     if fast_mode_adjustments is not None:
         fast_mode_adjustments["mode"] = scan_mode_selected
 
+    # Harmonize concurrency with the capabilities of the selected mode.
+    normalized_concurrency, original_concurrency = normalize_concurrency_for_mode(
+        parsed_arguments.concurrency,
+        scan_mode_selected,
+    )
+    concurrency_was_reduced = original_concurrency is not None
+    parsed_arguments.concurrency = normalized_concurrency
+    if fast_mode_adjustments is not None:
+        fast_mode_adjustments["concurrency"] = parsed_arguments.concurrency
+
     # PCAP implies Scapy must be available to capture packets.
     if getattr(parsed_arguments, "pcap", None) and not SCAPY_AVAILABLE:
         print("Scapy required for --pcap. Install with: pip install scapy")
@@ -940,6 +978,10 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
         f"timeout={parsed_arguments.timeout}s "
         f"rate={parsed_arguments.rate}/s"
     )
+    if concurrency_was_reduced:
+        print(
+            f"Adjusted concurrency to {parsed_arguments.concurrency} to keep {scan_mode_selected.upper()} mode stable."
+        )
     if fast_mode_adjustments is not None:
         rate_description = "off" if parsed_arguments.rate <= 0 else f"{parsed_arguments.rate}/s"
         shuffle_state_description = "on" if parsed_arguments.shuffle else "off"
@@ -1117,6 +1159,14 @@ def run_test_battery(targets_file: str,
     event_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(event_loop)
 
+    connect_concurrency, _ = normalize_concurrency_for_mode(base_arguments.concurrency, "connect")
+    syn_concurrency, syn_original = normalize_concurrency_for_mode(base_arguments.concurrency, "syn")
+    udp_concurrency, udp_original = normalize_concurrency_for_mode(base_arguments.concurrency, "udp")
+    if syn_original is not None:
+        print(f"[TEST] Adjusted concurrency to {syn_concurrency} for SYN stability.")
+    if udp_original is not None:
+        print(f"[TEST] Adjusted concurrency to {udp_concurrency} for UDP stability.")
+
     for target_label_text in targets_list:
         resolved_ip_address = event_loop.run_until_complete(resolve_dns_label_to_ip(target_label_text))
         if fast_mode_adjustments is not None and not is_external_ip(resolved_ip_address):
@@ -1128,7 +1178,7 @@ def run_test_battery(targets_file: str,
                 selected_ports=test_ports_connect,
                 selected_mode="connect",
                 timeout_seconds=base_arguments.timeout,
-                max_concurrency=base_arguments.concurrency,
+                max_concurrency=connect_concurrency,
                 show_closed_in_output=base_arguments.show_closed,
                 banner_enabled=base_arguments.banner,
                 per_host_ops_per_sec=base_arguments.rate,
@@ -1159,7 +1209,7 @@ def run_test_battery(targets_file: str,
                     selected_ports=test_ports_syn,
                     selected_mode="syn",
                     timeout_seconds=base_arguments.timeout,
-                    max_concurrency=base_arguments.concurrency,
+                    max_concurrency=syn_concurrency,
                     show_closed_in_output=base_arguments.show_closed,
                     banner_enabled=False,
                     per_host_ops_per_sec=base_arguments.rate,
@@ -1183,7 +1233,7 @@ def run_test_battery(targets_file: str,
                     selected_ports=test_ports_udp,
                     selected_mode="udp",
                     timeout_seconds=base_arguments.timeout,
-                    max_concurrency=base_arguments.concurrency,
+                    max_concurrency=udp_concurrency,
                     show_closed_in_output=base_arguments.show_closed,
                     banner_enabled=False,
                     per_host_ops_per_sec=base_arguments.rate,
