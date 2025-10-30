@@ -2,27 +2,35 @@
 # SMRIB – Multi-protocol scanner with intelligent recognition and buffering.
 #
 # Fresh execution examples generated for each primary capability:
+#
 # 1. Targeted TCP connect sweep with banner capture and explicit artifact names.
 #    Command: python3 smrib.py --targets scanner.dev --ports "443,8443" --banner --csv tls_connect.csv --json tls_connect.json --pcap tls_connect.pcap
 #    Outcome: establishes full TCP sessions, captures available TLS banners, and stores results in the requested CSV/JSON/PCAP files.
+#
 # 2. High-concurrency TCP SYN reconnaissance respecting rate guards.
 #    Command: sudo python3 smrib.py --targets audit.net --start 1 --end 1024 --syn --rate 15 --concurrency 600 --json syn_audit.json
 #    Outcome: performs Scapy-powered SYN scans, throttled to fifteen operations per second, while collecting structured JSON output.
+#
 # 3. UDP DNS inspection with adaptive retries and packet capture.
 #    Command: sudo python3 smrib.py --targets 1.1.1.1 --ports 53 --udp --udp-probe dns --timeout 1.5 --retries 3 --retry-backoff 0.25 --pcap dns_lookup.pcap
 #    Outcome: emits DNS queries with exponential backoff, captures responses, and reports UDP reachability.
+#
 # 4. UDP NTP probing for time services validation.
 #    Command: sudo python3 smrib.py --targets 17.253.84.253 --ports 123 --udp --udp-probe ntp --timeout 4 --retries 2 --csv ntp_report.csv
 #    Outcome: verifies NTP listener availability, persisting responses into a CSV report.
+#
 # 5. Fast mode acceleration with shuffled ports and automatic adjustments.
 #    Command: python3 smrib.py --targets prod.edge --ports "22,80,443,9000-9005" --fast --show-closed --json fast_profile.json
 #    Outcome: enforces aggressive timeouts, disables banners, randomizes port order, and exports a JSON summary including closed ports.
+#
 # 6. Batch-driven multi-run execution from specification file.
 #    Command: python3 smrib.py --test runspec.txt
 #    Outcome: iterates through each valid CLI line inside runspec.txt, executing scans sequentially.
+#
 # 7. Compact diagnostic battery against a list of endpoints.
 #    Command: python3 smrib.py --test-battery diagnostics.txt --csv diagnostics.csv --json diagnostics.json
 #    Outcome: conducts TCP connect, SYN, and UDP checks where permitted, consolidating the diagnostic results.
+#
 # 8. Web directory listing helper using HTTP wordlists.
 #    Command: python3 smrib.py --web-dir --url https://portal.example --wordlist wordlist.txt
 #    Outcome: probes candidate paths from the wordlist and prints discovered HTTP status codes.
