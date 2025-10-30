@@ -1,0 +1,7 @@
+# SCAN ALL MACHINES 
+#--targets 10.0.5.0/24 --ports "80" --csv
+
+--targets 10.0.5.2 --start 1 --end 65535 --syn --rate 500 --concurrency 500 --timeout 1 --csv 10.0.5.2-FULL-SCAN-1s.csv
+--targets 10.0.5.5 --start 1 --end 65535 --syn --rate 500 --concurrency 500 --timeout 1 --csv 10.0.5.5-FULL-SCAN-1s.csv
+--targets 10.0.5.9 --start 1 --end 65535 --syn --rate 500 --concurrency 500 --timeout 1 --csv 10.0.5.9-FULL-SCAN-1s.csv
+

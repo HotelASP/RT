@@ -1,0 +1,8 @@
+--targets hotelasp.com --start 1 --end 65535 --rate 10 --concurrency 100 --csv batch-hotelasp.com.csv --json batch-hotelasp.com.json --pcap batch-hotelasp.com.pcap
+#
+--targets hotelalcaide.no-ip.biz --start 1 --end 65535 --rate 10 --concurrency 100 --csv batch-hotelalcaide.no-ip.biz.csv --json batch-hhotelalcaide.no-ip.biz.json --pcap batch-hotelalcaide.no-ip.biz.pcap
+#
+--targets hotelalcaide5g.ddns.net --start 1 --end 65535 --rate 10 --concurrency 100 --csv batch-hotelalcaide5g.ddns.net.csv --json batch-hotelalcaide5g.ddns.net.json --pcap batch-hotelalcaide5g.ddns.net.pcap
+#
+--targets hotelalcaide2.ddns.net --start 1 --end 65535 --rate 10 --concurrency 100 --csv batch-hotelalcaide2.ddns.net.csv --json batch-hotelalcaide2.ddns.net.json --pcap batch-hotelalcaide2.ddns.net.pcap
+

@@ -64,7 +64,7 @@ from typing import Dict, List, Optional, Tuple, Any
 #     - If scapy+root: TCP SYN on [21, 22,80,443] and UDP DNS on 53
 #   Respects --csv/--json/--pcap persistence.
 #
-# python3 portscanner-mrib.py --test-battery targets.txt --csv bat.csv --json bat.json --pcap bat.pcap
+# python3 portscanner-mrib.py --test-battery targets.txt --csv battery.csv --json battery.json --pcap battery.pcap
 ## targets.txt
 # hotelasp.com
 # hackthissite.org
@@ -95,8 +95,8 @@ DEFAULTS: Dict[str, object] = {
     "HOST": os.environ.get("PORTSCAN_HOST", "137.74.187.102"),
     "START": int(os.environ.get("PORTSCAN_START", "1")),
     "END": int(os.environ.get("PORTSCAN_END", "1024")),
-    "CONCURRENCY": int(os.environ.get("PORTSCAN_CONCURRENCY", "1")),
-    "TIMEOUT": float(os.environ.get("PORTSCAN_TIMEOUT", "1.0")),
+    "CONCURRENCY": int(os.environ.get("PORTSCAN_CONCURRENCY", "100")),
+    "TIMEOUT": float(os.environ.get("PORTSCAN_TIMEOUT", "0.3")),
     "RATE": int(os.environ.get("PORTSCAN_RATE", "0")),  # 0 disables rate limiting
 }
 
