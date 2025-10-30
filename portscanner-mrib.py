@@ -196,9 +196,16 @@ def apply_fast_mode_overrides(parsed_arguments: argparse.Namespace) -> Optional[
 
     configured_timeout = float(getattr(parsed_arguments, "timeout", 0.0))
     if configured_timeout <= 0.0:
-        optimized_timeout = 0.04
+        # When no timeout is configured, default to a moderately aggressive
+        # value instead of the extremely small 40ms window that caused fast
+        # scans to miss legitimate responses on higher-latency networks.
+        optimized_timeout = 0.3
     else:
-        optimized_timeout = max(0.02, min(configured_timeout, 0.08))
+        # Clamp the timeout, but allow enough time for common LAN/WAN round
+        # trips (~250ms+) so that fast mode still observes open ports instead of
+        # timing out prematurely.  0.3s matches the non-fast default while still
+        # permitting users to supply lower custom values explicitly.
+        optimized_timeout = min(configured_timeout, 0.3)
     parsed_arguments.timeout = optimized_timeout
     fast_mode_adjustments["timeout"] = optimized_timeout
 
