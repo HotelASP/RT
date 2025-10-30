@@ -1,0 +1,12 @@
+#######################################################################################################################
+# SCAN ALL MACHINES 
+#--targets 10.0.5.0/24 --ports "80" --csv
+#######################################################################################################################
+--targets 10.0.5.2 --start 1 --end 65535 --syn --concurrency 500 --timeout 0.3 --csv scan_10_0_5_2_full.csv
+--targets 10.0.5.5 --start 1 --end 65535 --syn --concurrency 500 --timeout 0.3 --csv scan_10_0_5_5_full.csv
+--targets 10.0.5.9 --start 1 --end 65535 --syn --concurrency 500 --timeout 0.3 --csv scan_10_0_5_9_full.csv
+
+--targets 10.0.5.2 --start 1 --end 65535 --fast --csv scan_10_0_5_2_full_fast.csv
+--targets 10.0.5.5 --start 1 --end 65535 --fast --csv scan_10_0_5_5_full_fast.csv
+--targets 10.0.5.9 --start 1 --end 65535 --fast --csv scan_10_0_5_9_full_fast.csv
+
