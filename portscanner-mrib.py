@@ -582,6 +582,7 @@ async def scan_all_selected_ports_for_host(target_ip: str,
                                            timeout_seconds: float,
                                            max_concurrency: int,
                                            show_closed_in_output: bool,
+                                           show_only_open_in_output: bool,
                                            banner_enabled: bool,
                                            per_host_ops_per_sec: int,
                                            udp_probe_kind: str,
@@ -590,8 +591,9 @@ async def scan_all_selected_ports_for_host(target_ip: str,
     # Scan all selected ports for a single host.
     # Return a tuple (confirmed_open_results, all_results_for_host).
     # Printing behavior:
-    #   - Always print "non-closed" events.
+    #   - Always print "non-closed" events unless show_only_open_in_output is True.
     #   - If show_closed_in_output is True, also print "closed".
+    #   - If show_only_open_in_output is True, only print "open" events regardless of other flags.
     # Persistence behavior is handled by the caller based on the same flag.
 
     effective_concurrency = max(1, max_concurrency)
@@ -646,10 +648,12 @@ async def scan_all_selected_ports_for_host(target_ip: str,
             host, port, proto, status, note, duration_ms = await finished
             timestamp = utc_now_str()
 
-            # Decide whether to print this line based on --show-closed
+            # Decide whether to print this line based on --show-closed/--show-only-open
             # We print all results when show_closed_in_output is True
             # Otherwise, print everything except "closed"
             should_print = show_closed_in_output or (status != "closed")
+            if show_only_open_in_output:
+                should_print = status == "open"
             if should_print:
                 note_suffix = f" {note}" if note else ""
                 print(f"# {timestamp}\t| {host}:{port}/{proto}\t= {status}{note_suffix} [{duration_ms}ms]")
@@ -830,6 +834,12 @@ def build_cli_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--show-only-open",
+        action="store_true",
+        help="Only print OPEN results in the terminal output."
+    )
+
+    parser.add_argument(
         "--shuffle",
         action="store_true",
         help="Randomize port order before scanning."
@@ -923,6 +933,7 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
     show_closed_in_terminal = bool(
         parsed_arguments.show_closed or getattr(parsed_arguments, "show_closed_terminal", False)
     )
+    show_only_open_in_terminal = bool(getattr(parsed_arguments, "show_only_open", False))
 
     # Compute the explicit list of ports to probe.
     ports_selected_for_scan = parse_port_specification(parsed_arguments.start, parsed_arguments.end, parsed_arguments.ports)
@@ -1045,6 +1056,7 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
                     timeout_seconds=parsed_arguments.timeout,
                     max_concurrency=parsed_arguments.concurrency,
                     show_closed_in_output=show_closed_in_terminal,
+                    show_only_open_in_output=show_only_open_in_terminal,
                     banner_enabled=parsed_arguments.banner,
                     per_host_ops_per_sec=parsed_arguments.rate,
                     udp_probe_kind=parsed_arguments.udp_probe,
@@ -1151,6 +1163,7 @@ def run_test_battery(targets_file: str,
     show_closed_in_terminal = bool(
         base_arguments.show_closed or getattr(base_arguments, "show_closed_terminal", False)
     )
+    show_only_open_in_terminal = bool(getattr(base_arguments, "show_only_open", False))
     if fast_mode_adjustments is not None:
         rate_description = "off" if base_arguments.rate <= 0 else f"{base_arguments.rate}/s"
         print(
@@ -1192,6 +1205,7 @@ def run_test_battery(targets_file: str,
                 timeout_seconds=base_arguments.timeout,
                 max_concurrency=connect_concurrency,
                 show_closed_in_output=show_closed_in_terminal,
+                show_only_open_in_output=show_only_open_in_terminal,
                 banner_enabled=base_arguments.banner,
                 per_host_ops_per_sec=base_arguments.rate,
                 udp_probe_kind=base_arguments.udp_probe,
@@ -1223,6 +1237,7 @@ def run_test_battery(targets_file: str,
                     timeout_seconds=base_arguments.timeout,
                     max_concurrency=syn_concurrency,
                     show_closed_in_output=show_closed_in_terminal,
+                    show_only_open_in_output=show_only_open_in_terminal,
                     banner_enabled=False,
                     per_host_ops_per_sec=base_arguments.rate,
                     udp_probe_kind=base_arguments.udp_probe,
@@ -1247,6 +1262,7 @@ def run_test_battery(targets_file: str,
                     timeout_seconds=base_arguments.timeout,
                     max_concurrency=udp_concurrency,
                     show_closed_in_output=show_closed_in_terminal,
+                    show_only_open_in_output=show_only_open_in_terminal,
                     banner_enabled=False,
                     per_host_ops_per_sec=base_arguments.rate,
                     udp_probe_kind="dns",
