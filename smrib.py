@@ -7,35 +7,35 @@
 #
 # 1. Targeted TCP connect sweep with banner capture and explicit artifact names.
 #    *** PCAP needs root ***
-#    Command: sudo python3 smrib.py --targets targets_hotelasp.txt --ports "21,22,80,443" --banner --csv hotelasp.csv --json hotelasp.json --pcap hotelasp.pcap
+#    Command: sudo python3 smrib.py --targets targets_hotelasp.txt --ports "21,22,80,443" --banner --csv 'Logs/log_hotelasp.csv' --json 'Logs/log_hotelasp.json' --pcap 'Logs/log_hotelasp.pcap'
 #    Outcome: establishes full TCP sessions, captures available TLS banners, and stores results in the requested CSV/JSON/PCAP files.
 #
 # 2. High-concurrency TCP SYN reconnaissance respecting rate guards.
-#    Command: sudo python3 smrib.py --targets audit.net --start 1 --end 1024 --syn --rate 15 --concurrency 600 --json syn_audit.json
+#    Command: sudo python3 smrib.py --targets 10.0.5.2 --start 1 --end 1024 --syn --rate 15 --concurrency 200 --csv 'Logs/log_syn_10_0_5_2.csv'
 #    Outcome: performs Scapy-powered SYN scans, throttled to fifteen operations per second, while collecting structured JSON output.
 #
 # 3. UDP DNS inspection with adaptive retries and packet capture.
-#    Command: sudo python3 smrib.py --targets 1.1.1.1 --ports 53 --udp --udp-probe dns --timeout 1.5 --retries 3 --retry-backoff 0.25 --pcap dns_lookup.pcap
+#    Command: sudo python3 smrib.py --targets 1.1.1.1 --ports 53 --udp --udp-probe dns --timeout 1.5 --retries 3 --retry-backoff 0.25 --csv 'Logs/log_dns_lookup.csv' --pcap 'Logs/log_dns_lookup.pcap'
 #    Outcome: emits DNS queries with exponential backoff, captures responses, and reports UDP reachability.
 #
 # 4. UDP NTP probing for time services validation.
-#    Command: sudo python3 smrib.py --targets 17.253.84.253 --ports 123 --udp --udp-probe ntp --timeout 4 --retries 2 --csv ntp_report.csv
+#    Command: sudo python3 smrib.py --targets 17.253.84.253 --ports 123 --udp --udp-probe ntp --timeout 4 --retries 2 --csv 'Logs/log_ntp_lookup.csv' --pcap 'Logs/log_ntp_lookup.pcap'
 #    Outcome: verifies NTP listener availability, persisting responses into a CSV report.
 #
 # 5. Fast mode acceleration with shuffled ports and automatic adjustments.
-#    Command: python3 smrib.py --targets prod.edge --ports "22,80,443,9000-9005" --fast --show-closed-terminal --json fast_profile.json
+#    Command: python3 smrib.py --targets 10.0.5.5  --ports "22,80,443,100-200" --fast --show-closed-terminal --csv 'Logs/log_fast_10_0_5_5.csv'
 #    Outcome: enforces aggressive timeouts, disables banners, randomizes port order, and exports a JSON summary including closed ports.
 #
 # 6. Batch-driven multi-run execution from specification file.
-#    Command: python3 smrib.py --batch runspec.txt
+#    Command: python3 smrib.py --batch batch_10_0_5_0.txt
 #    Outcome: iterates through each valid CLI line inside runspec.txt, executing scans sequentially.
 #
 # 7. Compact diagnostic battery against a list of endpoints.
-#    Command: python3 smrib.py --batch-battery diagnostics.txt --csv diagnostics.csv --json diagnostics.json
+#    Command: python3 smrib.py --batch-battery targets_hotelasp.txt --csv 'Logs/batch_battery_hotelasp.csv' --json 'Logs/batch_battery_hotelasp.json'
 #    Outcome: conducts TCP connect, SYN, and UDP checks where permitted, consolidating the diagnostic results.
 #
 # 8. Web directory listing helper using HTTP wordlists.
-#    Command: python3 smrib.py --web-dir --url https://portal.example --wordlist wordlist.txt
+#    Command: python3 smrib.py --web-dir --url https://hotelasp.com --wordlist webdir_wordlist.txt
 #    Outcome: probes candidate paths from the wordlist and prints discovered HTTP status codes.
 
 from __future__ import annotations

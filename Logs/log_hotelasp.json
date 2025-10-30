@@ -1,0 +1,65 @@
+[
+  {
+    "host": "160.153.248.110",
+    "port": 443,
+    "proto": "tcp",
+    "status": "open",
+    "note": "",
+    "time": "2025-10-30 17:22:15",
+    "duration_ms": 651
+  },
+  {
+    "host": "160.153.248.110",
+    "port": 80,
+    "proto": "tcp",
+    "status": "open",
+    "note": "",
+    "time": "2025-10-30 17:22:15",
+    "duration_ms": 659
+  },
+  {
+    "host": "160.153.248.110",
+    "port": 21,
+    "proto": "tcp",
+    "status": "open",
+    "note": "220-Microsoft FTP Service\r\n220 *** B ***",
+    "time": "2025-10-30 17:22:15",
+    "duration_ms": 695
+  },
+  {
+    "host": "82.154.255.38",
+    "port": 80,
+    "proto": "tcp",
+    "status": "open",
+    "note": "",
+    "time": "2025-10-30 17:22:16",
+    "duration_ms": 651
+  },
+  {
+    "host": "82.154.255.38",
+    "port": 443,
+    "proto": "tcp",
+    "status": "open",
+    "note": "",
+    "time": "2025-10-30 17:22:16",
+    "duration_ms": 651
+  },
+  {
+    "host": "82.154.255.38",
+    "port": 22,
+    "proto": "tcp",
+    "status": "open",
+    "note": "SSH-2.0-dropbear\r\n\u0000\u0000\u0001\f\u0004\u0014\udbb4\udd26\ufffdh\ufffd\ufffd\ufffd6\ufffd\u00056\ufffd\ufffd\u0000\u0000\u0000Pdiffie-hellman-group14-sha1,diffie-hellman-group1-sha1,kexguess2@matt.ucc.asn.au\u0000\u0000\u0000\u0007ssh-rsa\u0000\u0000\u0000\u0015aes128-ctr,aes256-ctr\u0000\u0000\u0000\u0015aes128-ctr,aes256-ctr\u0000\u0000\u0000 hmac-sha1,hmac-sha2-256,hmac-md5\u0000\u0000\u0000 hmac-sha1,hmac-sha2-256,hmac-md5\u0000\u0000\u0000\u0004none\u0000\u0000\u0000\u0004none\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\ufffd\u05b6\u0002",
+    "time": "2025-10-30 17:22:16",
+    "duration_ms": 655
+  },
+  {
+    "host": "93.102.246.188",
+    "port": 443,
+    "proto": "tcp",
+    "status": "open",
+    "note": "",
+    "time": "2025-10-30 17:22:17",
+    "duration_ms": 656
+  }
+]
