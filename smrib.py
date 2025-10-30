@@ -30,7 +30,7 @@
 #    Outcome: iterates through each valid CLI line inside runspec.txt, executing scans sequentially.
 #
 # 7. Compact diagnostic battery against a list of endpoints.
-#    Command: python3 smrib.py --batch-batter diagnostics.txt --csv diagnostics.csv --json diagnostics.json
+#    Command: python3 smrib.py --batch-battery diagnostics.txt --csv diagnostics.csv --json diagnostics.json
 #    Outcome: conducts TCP connect, SYN, and UDP checks where permitted, consolidating the diagnostic results.
 #
 # 8. Web directory listing helper using HTTP wordlists.
@@ -1018,7 +1018,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
         help="Batch mode. SPECFILE has one full CLI spec per non-comment line. Prefix before first '-' is ignored."
     )
     parser.add_argument(
-        "--batch-batter",
+        "--batch-battery",
         metavar="TARGETS_FILE",
         dest="batch_batter",
         help="Run a compact test battery against targets listed in TARGETS_FILE."
