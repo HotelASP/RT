@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-# SMRIB – Multi-protocol scanner with intelligent recognition and buffering.
+#----------------------------------------------------------------------------
+# SMRIB – Multi-protocol scanner 
+#----------------------------------------------------------------------------
 #
-# Fresh execution examples generated for each primary capability:
+# Execution examples:
 #
 # 1. Targeted TCP connect sweep with banner capture and explicit artifact names.
 #    Command: python3 smrib.py --targets scanner.dev --ports "443,8443" --banner --csv tls_connect.csv --json tls_connect.json --pcap tls_connect.pcap
