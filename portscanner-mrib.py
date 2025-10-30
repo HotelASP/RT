@@ -824,6 +824,12 @@ def build_cli_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--show-closed-terminal",
+        action="store_true",
+        help="Print CLOSED results in the terminal without persisting them."
+    )
+
+    parser.add_argument(
         "--shuffle",
         action="store_true",
         help="Randomize port order before scanning."
@@ -914,6 +920,9 @@ def build_cli_parser() -> argparse.ArgumentParser:
 def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
     # Execute a complete scan flow using the parsed arguments and return the aggregated results.
     fast_mode_adjustments = apply_fast_mode_overrides(parsed_arguments)
+    show_closed_in_terminal = bool(
+        parsed_arguments.show_closed or getattr(parsed_arguments, "show_closed_terminal", False)
+    )
 
     # Compute the explicit list of ports to probe.
     ports_selected_for_scan = parse_port_specification(parsed_arguments.start, parsed_arguments.end, parsed_arguments.ports)
@@ -1035,7 +1044,7 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
                     selected_mode=scan_mode_selected,
                     timeout_seconds=parsed_arguments.timeout,
                     max_concurrency=parsed_arguments.concurrency,
-                    show_closed_in_output=parsed_arguments.show_closed,
+                    show_closed_in_output=show_closed_in_terminal,
                     banner_enabled=parsed_arguments.banner,
                     per_host_ops_per_sec=parsed_arguments.rate,
                     udp_probe_kind=parsed_arguments.udp_probe,
@@ -1139,6 +1148,9 @@ def run_test_battery(targets_file: str,
         return
 
     fast_mode_adjustments = apply_fast_mode_overrides(base_arguments)
+    show_closed_in_terminal = bool(
+        base_arguments.show_closed or getattr(base_arguments, "show_closed_terminal", False)
+    )
     if fast_mode_adjustments is not None:
         rate_description = "off" if base_arguments.rate <= 0 else f"{base_arguments.rate}/s"
         print(
@@ -1179,7 +1191,7 @@ def run_test_battery(targets_file: str,
                 selected_mode="connect",
                 timeout_seconds=base_arguments.timeout,
                 max_concurrency=connect_concurrency,
-                show_closed_in_output=base_arguments.show_closed,
+                show_closed_in_output=show_closed_in_terminal,
                 banner_enabled=base_arguments.banner,
                 per_host_ops_per_sec=base_arguments.rate,
                 udp_probe_kind=base_arguments.udp_probe,
@@ -1210,7 +1222,7 @@ def run_test_battery(targets_file: str,
                     selected_mode="syn",
                     timeout_seconds=base_arguments.timeout,
                     max_concurrency=syn_concurrency,
-                    show_closed_in_output=base_arguments.show_closed,
+                    show_closed_in_output=show_closed_in_terminal,
                     banner_enabled=False,
                     per_host_ops_per_sec=base_arguments.rate,
                     udp_probe_kind=base_arguments.udp_probe,
@@ -1234,7 +1246,7 @@ def run_test_battery(targets_file: str,
                     selected_mode="udp",
                     timeout_seconds=base_arguments.timeout,
                     max_concurrency=udp_concurrency,
-                    show_closed_in_output=base_arguments.show_closed,
+                    show_closed_in_output=show_closed_in_terminal,
                     banner_enabled=False,
                     per_host_ops_per_sec=base_arguments.rate,
                     udp_probe_kind="dns",
