@@ -45,6 +45,11 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple, Any, Set
 
+if sys.platform != "win32":
+    import resource  # type: ignore[attr-defined]
+else:
+    resource = None  # type: ignore[assignment]
+
 # BATCH MODE:
 #   Use --test <specfile>. Each non-empty, non-comment line in <specfile> is a
 #   complete CLI spec. Anything before the first '-' option on a line is ignored,
@@ -105,6 +110,46 @@ DEFAULTS: Dict[str, object] = {
 
 # Upper bound for Scapy-driven modes to prevent resource exhaustion.
 SCAPY_CONCURRENCY_LIMIT: int = max(1, int(os.environ.get("PORTSCAN_SCAPY_MAX_CONCURRENCY", "256")))
+
+# Safety margin applied when enforcing the process file descriptor soft limit.
+FD_LIMIT_SAFETY_MARGIN: int = 32
+
+# Baseline concurrency target when --fast is supplied.
+FAST_MODE_MIN_CONCURRENCY: int = 1024
+
+
+def query_process_fd_soft_limit() -> Optional[int]:
+    """Return the soft RLIMIT_NOFILE value when available."""
+
+    if resource is None:
+        return None
+
+    try:
+        soft_limit, _ = resource.getrlimit(resource.RLIMIT_NOFILE)  # type: ignore[arg-type]
+    except Exception:
+        return None
+
+    infinity = getattr(resource, "RLIM_INFINITY", None)
+    if infinity is not None and soft_limit == infinity:
+        return None
+    if soft_limit <= 0:
+        return None
+    return int(soft_limit)
+
+
+def apply_fd_limit_guardrail(desired_concurrency: int) -> Tuple[int, Optional[int]]:
+    """Clamp concurrency so it respects the process file descriptor soft limit."""
+
+    sanitized = max(1, int(desired_concurrency))
+    soft_limit = query_process_fd_soft_limit()
+    if soft_limit is None:
+        return sanitized, None
+
+    dynamic_margin = min(max(FD_LIMIT_SAFETY_MARGIN, soft_limit // 10), 256)
+    max_allowed = max(1, soft_limit - dynamic_margin)
+    if sanitized <= max_allowed:
+        return sanitized, None
+    return max_allowed, soft_limit
 
 # -----------------------------------------------------------------------------
 # Time and formatting helpers
@@ -191,9 +236,14 @@ def apply_fast_mode_overrides(parsed_arguments: argparse.Namespace) -> Optional[
     fast_mode_adjustments: Dict[str, object] = {}
 
     requested_concurrency = int(getattr(parsed_arguments, "concurrency", 0))
-    optimized_concurrency = max(requested_concurrency, 1024)
+    fast_target = max(requested_concurrency, FAST_MODE_MIN_CONCURRENCY)
+    optimized_concurrency, fd_limit = apply_fd_limit_guardrail(fast_target)
     parsed_arguments.concurrency = optimized_concurrency
     fast_mode_adjustments["concurrency"] = optimized_concurrency
+    if fd_limit is not None and optimized_concurrency < fast_target:
+        fast_mode_adjustments["concurrency_guardrail_notice"] = (
+            f"Concurrency capped at {optimized_concurrency} due to file descriptor soft limit {fd_limit}."
+        )
 
     configured_timeout = float(getattr(parsed_arguments, "timeout", 0.0))
     if configured_timeout <= 0.0:
@@ -239,13 +289,38 @@ def apply_fast_mode_overrides(parsed_arguments: argparse.Namespace) -> Optional[
     return fast_mode_adjustments
 
 
-def normalize_concurrency_for_mode(requested_concurrency: int, selected_mode: str) -> Tuple[int, Optional[int]]:
+def normalize_concurrency_for_mode(requested_concurrency: int, selected_mode: str) -> Tuple[int, Optional[str]]:
     # Clamp user-supplied concurrency to safe limits depending on the scan mode.
-    sanitized_concurrency = max(1, int(requested_concurrency))
-    if selected_mode in ("syn", "udp"):
-        if sanitized_concurrency > SCAPY_CONCURRENCY_LIMIT:
-            return SCAPY_CONCURRENCY_LIMIT, sanitized_concurrency
-    return sanitized_concurrency, None
+    initial_value = max(1, int(requested_concurrency))
+    adjusted_value = initial_value
+    reason_parts: List[str] = []
+
+    if selected_mode in ("syn", "udp") and adjusted_value > SCAPY_CONCURRENCY_LIMIT:
+        reason_parts.append(f"SYN/UDP worker cap {SCAPY_CONCURRENCY_LIMIT}")
+        adjusted_value = SCAPY_CONCURRENCY_LIMIT
+
+    fd_guarded_value, fd_limit = apply_fd_limit_guardrail(adjusted_value)
+    if fd_guarded_value != adjusted_value:
+        adjusted_value = fd_guarded_value
+        if fd_limit is not None:
+            reason_parts.append(f"file descriptor soft limit {fd_limit}")
+        else:
+            reason_parts.append("file descriptor guardrail")
+
+    if adjusted_value != initial_value:
+        if not reason_parts:
+            reason = "internal guardrails"
+        elif len(reason_parts) == 1:
+            reason = reason_parts[0]
+        else:
+            reason = ", ".join(reason_parts[:-1]) + f", and {reason_parts[-1]}"
+        message = (
+            f"{selected_mode.upper()} concurrency adjusted from {initial_value} to {adjusted_value} "
+            f"to respect {reason}."
+        )
+        return adjusted_value, message
+
+    return adjusted_value, None
 
 # -----------------------------------------------------------------------------
 # Port list parsing
@@ -991,11 +1066,10 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
         fast_mode_adjustments["mode"] = scan_mode_selected
 
     # Harmonize concurrency with the capabilities of the selected mode.
-    normalized_concurrency, original_concurrency = normalize_concurrency_for_mode(
+    normalized_concurrency, concurrency_notice = normalize_concurrency_for_mode(
         parsed_arguments.concurrency,
         scan_mode_selected,
     )
-    concurrency_was_reduced = original_concurrency is not None
     parsed_arguments.concurrency = normalized_concurrency
     if fast_mode_adjustments is not None:
         fast_mode_adjustments["concurrency"] = parsed_arguments.concurrency
@@ -1036,10 +1110,8 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
         f"timeout={parsed_arguments.timeout}s "
         f"rate={parsed_arguments.rate}/s"
     )
-    if concurrency_was_reduced:
-        print(
-            f"Adjusted concurrency to {parsed_arguments.concurrency} to keep {scan_mode_selected.upper()} mode stable."
-        )
+    if concurrency_notice:
+        print(concurrency_notice)
     if fast_mode_adjustments is not None:
         rate_description = "off" if parsed_arguments.rate <= 0 else f"{parsed_arguments.rate}/s"
         shuffle_state_description = "on" if parsed_arguments.shuffle else "off"
@@ -1051,6 +1123,9 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
             f"rate-limit={rate_description} shuffle={shuffle_state_description} banner={banner_state_description} "
             f"retries={parsed_arguments.retries} backoff={parsed_arguments.retry_backoff}s"
         )
+        guardrail_notice = fast_mode_adjustments.get("concurrency_guardrail_notice")
+        if guardrail_notice:
+            print(f"[fast] {guardrail_notice}")
         print("[fast] Private and internal networks are included automatically.")
     print("")
 
@@ -1217,6 +1292,9 @@ def run_test_battery(targets_file: str,
             f"timeout={base_arguments.timeout}s rate-limit={rate_description} "
             f"shuffle={'on' if base_arguments.shuffle else 'off'} banner={'on' if base_arguments.banner else 'off'}"
         )
+        guardrail_notice = fast_mode_adjustments.get("concurrency_guardrail_notice")
+        if guardrail_notice:
+            print(f"[fast] {guardrail_notice}")
         print("[fast] Private and internal networks are included automatically during the battery.")
 
     test_ports_connect = [21, 22, 80, 443]
@@ -1230,13 +1308,12 @@ def run_test_battery(targets_file: str,
     event_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(event_loop)
 
-    connect_concurrency, _ = normalize_concurrency_for_mode(base_arguments.concurrency, "connect")
-    syn_concurrency, syn_original = normalize_concurrency_for_mode(base_arguments.concurrency, "syn")
-    udp_concurrency, udp_original = normalize_concurrency_for_mode(base_arguments.concurrency, "udp")
-    if syn_original is not None:
-        print(f"[TEST] Adjusted concurrency to {syn_concurrency} for SYN stability.")
-    if udp_original is not None:
-        print(f"[TEST] Adjusted concurrency to {udp_concurrency} for UDP stability.")
+    connect_concurrency, connect_notice = normalize_concurrency_for_mode(base_arguments.concurrency, "connect")
+    syn_concurrency, syn_notice = normalize_concurrency_for_mode(base_arguments.concurrency, "syn")
+    udp_concurrency, udp_notice = normalize_concurrency_for_mode(base_arguments.concurrency, "udp")
+    for notice in (connect_notice, syn_notice, udp_notice):
+        if notice:
+            print(f"[TEST] {notice}")
 
     for target_label_text in targets_list:
         resolved_ip_address = event_loop.run_until_complete(resolve_dns_label_to_ip(target_label_text))
