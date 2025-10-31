@@ -1,0 +1,337 @@
+########## 30 OUT ##########
+#####################################################################################################
+#####################################################################################################
+#####################################################################################################
+
+eyewitness --web -f targets_10_0_5_0.txt -d 'Logs/EW'
+
+#####################################################################################################
+#####################################################################################################
+#####################################################################################################
+
+# obter wordlists
+
+ /usr/share/wordlists/dirbuster/directory-list-lowercase-2.3-medium.txt
+ /usr/share/wordlists
+ 
+cewl http://10.0.5.5 -w webdir_wordlist_10_0_5_5.txt
+
+
+### descobrir info sobre o webserver 
+
+─(kali㉿kali-mrib)-[~/Desktop/RT]
+└─$ whatweb http://10.0.5.5
+http://10.0.5.5 [200 OK] Apache[2.2.8], Cookies[PHPSESSID], Country[RESERVED][ZZ], HTTPServer[Ubuntu Linux][Apache/2.2.8 (Ubuntu) PHP/5.2.4-2ubuntu5.6 with Suhosin-Patch], IP[10.0.5.5], maybe LotusCMS, Meta-Author[name of author - Manjeet Singh Sawhney   www.manjeetss.com], PHP[5.2.4-2ubuntu5.6][Suhosin-Patch], Title[Ligoat Security - Got Goat? Security ...], X-Powered-By[PHP/5.2.4-2ubuntu5.6]
+                                      
+#####################################################################################################
+#####################################################################################################
+#####################################################################################################                            
+
+                                      
+https://github.com/danielmiessler/SecLists
+
+
+#####################################################################################################
+#####################################################################################################
+#####################################################################################################
+
+python3 smrib.py --web-dir --url http://10.0.5.5 --wordlist webdir_wordlist.txt
+
+┌──(kali㉿kali-mrib)-[~/Desktop/RT]
+└─$ python3 smrib.py --web-dir --url http://10.0.5.5 --wordlist  webdir_wordlist.txt
+[404] /default.aspx
+[404] /saas.aspx
+[404] /admin
+[404] /administrator
+[404] /adm
+[404] /cpanel
+[404] /login
+[404] /user
+[404] /users
+[404] /auth
+[404] /dashboard
+[404] /manage
+[404] /management
+[404] /wp
+[404] /wp-admin
+[404] /wp-login.php
+[404] /wordpress
+[404] /xmlrpc.php
+[404] /wp-content
+[404] /wp-includes
+[404] /uploads
+[404] /files
+[404] /static
+[404] /assets
+[404] /img
+[404] /images
+[404] /js
+[404] /css
+[404] /api
+[404] /v1
+[404] /v2
+[404] /backup
+[404] /backups
+[404] /bak
+[404] /old
+[404] /tmp
+[404] /temp
+[404] /config
+[404] /config.php
+[404] /db
+[404] /database
+[404] /dump.sql
+[404] /dump
+[404] /.sql
+[404] /.env
+[403] /.htaccess
+[403] /.htpasswd
+[404] /.git
+[404] /.gitignore
+[404] /svn
+[404] /svnroot
+[404] /git
+[404] /credentials
+[404] /secrets
+[404] /private
+[403] /server-status
+[404] /phpinfo.php
+[404] /phpinfo
+[404] /robots.txt
+[404] /sitemap.xml
+[404] /robots
+[404] /readme.html
+[404] /CHANGELOG
+[404] /LICENSE
+[404] /license.txt
+[403] /.htaccess
+[200] /index.php
+[404] /index.html
+[404] /install
+[404] /setup
+[404] /setup.php
+[404] /install.php
+[404] /installer
+[404] /uploads/images
+[404] /uploads/files
+[404] /download
+[404] /downloads
+[404] /docs
+[404] /documentation
+[404] /doc
+[200] /phpmyadmin
+[404] /pma
+[404] /sql
+[404] /logs
+[404] /log
+[404] /logs/error.log
+[404] /error_log
+[200] /core
+[404] /vendor
+[404] /composer.json
+[404] /node_modules
+[404] /package.json
+[404] /cgi-bin
+[404] /webdav
+[404] /api-docs
+[404] /swagger.json
+[404] /.aws
+[404] /backup.zip
+[404] /site.zip
+[404] /export
+[404] /export.zip
+                                                                                                                                   
+┌──(kali㉿kali-mrib)-[~/Desktop/RT]
+
+#####################################################################################################
+#####################################################################################################
+#####################################################################################################
+
+gobuster dir -u http://10.0.5.5 -w webdir_wordlist.txt
+
+┌──(kali㉿kali-mrib)-[~/Desktop/RT]
+└─$ gobuster dir -u http://10.0.5.5 -w webdir_wordlist.txt
+===============================================================
+Gobuster v3.8
+by OJ Reeves (@TheColonial) & Christian Mehlmauer (@firefart)
+===============================================================
+[+] Url:                     http://10.0.5.5
+[+] Method:                  GET
+[+] Threads:                 10
+[+] Wordlist:                webdir_wordlist.txt
+[+] Negative Status codes:   404
+[+] User Agent:              gobuster/3.8
+[+] Timeout:                 10s
+===============================================================
+Starting gobuster in directory enumeration mode
+===============================================================
+/.htaccess            (Status: 403) [Size: 324]
+/.htpasswd            (Status: 403) [Size: 324]
+/server-status        (Status: 403) [Size: 328]
+/.htaccess            (Status: 403) [Size: 324]
+/index.php            (Status: 200) [Size: 1819]
+/phpmyadmin           (Status: 301) [Size: 348] [--> http://10.0.5.5/phpmyadmin/]
+/core                 (Status: 301) [Size: 342] [--> http://10.0.5.5/core/]
+Progress: 101 / 101 (100.00%)
+===============================================================
+Finished
+===============================================================
+
+
+#####################################################################################################
+#####################################################################################################
+#####################################################################################################
+
+
+nikto -h http://10.0.5.5
+
+┌──(kali㉿kali-mrib)-[~/Desktop/RT]
+└─$ nikto -h http://10.0.5.5
+- Nikto v2.5.0
+---------------------------------------------------------------------------
++ Target IP:          10.0.5.5
++ Target Hostname:    10.0.5.5
++ Target Port:        80
++ Start Time:         2025-10-30 19:07:59 (GMT0)
+---------------------------------------------------------------------------
++ Server: Apache/2.2.8 (Ubuntu) PHP/5.2.4-2ubuntu5.6 with Suhosin-Patch
++ /: Retrieved x-powered-by header: PHP/5.2.4-2ubuntu5.6.
++ /: The anti-clickjacking X-Frame-Options header is not present. See: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Frame-Options
++ /: The X-Content-Type-Options header is not set. This could allow the user agent to render the content of the site in a different fashion to the MIME type. See: https://www.netsparker.com/web-vulnerability-scanner/vulnerabilities/missing-content-type-header/
++ /: Cookie PHPSESSID created without the httponly flag. See: https://developer.mozilla.org/en-US/docs/Web/HTTP/Cookies
++ No CGI Directories found (use '-C all' to force check all possible dirs)
++ PHP/5.2.4-2ubuntu5.6 appears to be outdated (current is at least 8.1.5), PHP 7.4.28 for the 7.4 branch.
++ Apache/2.2.8 appears to be outdated (current is at least Apache/2.4.54). Apache 2.2.34 is the EOL for the 2.x branch.
++ /favicon.ico: Server may leak inodes via ETags, header found with file /favicon.ico, inode: 7519, size: 23126, mtime: Fri Jun  5 20:22:00 2009. See: http://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2003-1418
++ /: Web Server returns a valid response with junk HTTP methods which may cause false positives.
++ /: HTTP TRACE method is active which suggests the host is vulnerable to XST. See: https://owasp.org/www-community/attacks/Cross_Site_Tracing
++ PHP/5.2 - PHP 3/4/5 and 7.0 are End of Life products without support.
++ /?=PHPB8B5F2A0-3C92-11d3-A3A9-4C7B08C10000: PHP reveals potentially sensitive information via certain HTTP requests that contain specific QUERY strings. See: OSVDB-12184
++ /?=PHPE9568F36-D428-11d2-A769-00AA001ACF42: PHP reveals potentially sensitive information via certain HTTP requests that contain specific QUERY strings. See: OSVDB-12184
++ /?=PHPE9568F34-D428-11d2-A769-00AA001ACF42: PHP reveals potentially sensitive information via certain HTTP requests that contain specific QUERY strings. See: OSVDB-12184
++ /?=PHPE9568F35-D428-11d2-A769-00AA001ACF42: PHP reveals potentially sensitive information via certain HTTP requests that contain specific QUERY strings. See: OSVDB-12184
++ /phpmyadmin/changelog.php: phpMyAdmin is for managing MySQL databases, and should be protected or limited to authorized hosts.
++ /icons/: Directory indexing found.
++ /icons/README: Apache default file found. See: https://www.vntweb.co.uk/apache-restricting-access-to-iconsreadme/
++ /phpmyadmin/: phpMyAdmin directory found.
++ /phpmyadmin/Documentation.html: phpMyAdmin is for managing MySQL databases, and should be protected or limited to authorized hosts.
++ /#wp-config.php#: #wp-config.php# file found. This file contains the credentials.
++ 8073 requests: 0 error(s) and 20 item(s) reported on remote host
++ End Time:           2025-10-30 19:32:39 (GMT0) (1480 seconds)
+---------------------------------------------------------------------------
+
+
+
+#####################################################################################################
+#####################################################################################################
+#####################################################################################################
+
+
+└─$ hydra -l -P /user/share/wordlists/rockyou.txt
+Hydra v9.6 (c) 2023 by van Hauser/THC & David Maciejak - Please do not use in military or secret service organizations, or for illegal purposes (this is non-binding, these *** ignore laws and ethics anyway).
+
+Hydra (https://github.com/vanhauser-thc/thc-hydra) starting at 2025-10-30 20:17:18
+Syntax: hydra [[[-l LOGIN|-L FILE] [-p PASS|-P FILE]] | [-C FILE]] [-e nsr] [-o FILE] [-t TASKS] [-M FILE [-T TASKS]] [-w TIME] [-W TIME] [-f] [-s PORT] [-x MIN:MAX:CHARSET] [-c TIME] [-ISOuvVd46] [-m MODULE_OPT] [service://server[:PORT][/OPT]]
+
+Options:
+  -l LOGIN or -L FILE  login with LOGIN name, or load several logins from FILE
+  -p PASS  or -P FILE  try password PASS, or load several passwords from FILE
+  -C FILE   colon separated "login:pass" format, instead of -L/-P options
+  -M FILE   list of servers to attack, one entry per line, ':' to specify port
+  -D XofY   Divide wordlist into Y segments and use the Xth segment.
+  -t TASKS  run TASKS number of connects in parallel per target (default: 16)
+  -U        service module usage details
+  -m OPT    options specific for a module, see -U output for information
+  -h        more command line options (COMPLETE HELP)
+  server    the target: DNS, IP or 192.168.0.0/24 (this OR the -M option)
+  service   the service to crack (see below for supported protocols)
+  OPT       some service modules support additional input (-U for module help)
+
+Supported services: adam6500 asterisk cisco cisco-enable cobaltstrike cvs firebird ftp[s] http[s]-{head|get|post} http[s]-{get|post}-form http-proxy http-proxy-urlenum icq imap[s] irc ldap2[s] ldap3[-{cram|digest}md5][s] memcached mssql mysql nntp oracle-listener oracle-sid pcanywhere pcnfs pop3[s] postgres radmin2 rdp redis rexec rlogin rpcap rsh rtsp s7-300 sip smb smtp[s] smtp-enum snmp socks5 ssh sshkey svn teamspeak telnet[s] vmauthd vnc xmpp
+
+Hydra is a tool to guess/crack valid login/password pairs.
+Licensed under AGPL v3.0. The newest version is always available at;
+https://github.com/vanhauser-thc/thc-hydra
+Please don't use in military or secret service organizations, or for illegal
+purposes. (This is a wish and non-binding - most such people do not care about
+laws and ethics anyway - and tell themselves they are one of the good ones.)
+
+Example:  hydra -l user -P passlist.txt ftp://192.168.0.1
+                                                                                                                                                                                                          
+┌──(kali㉿kali-mrib)-[/usr/share/wordlists]
+└─$ hydra -l user -P /user/share/wordlists/rockyou.txt
+Hydra v9.6 (c) 2023 by van Hauser/THC & David Maciejak - Please do not use in military or secret service organizations, or for illegal purposes (this is non-binding, these *** ignore laws and ethics anyway).
+
+Hydra (https://github.com/vanhauser-thc/thc-hydra) starting at 2025-10-30 20:17:39
+[ERROR] Invalid target definition!
+[ERROR] Either you use "www.example.com module [optional-module-parameters]" *or* you use the "module://www.example.com/optional-module-parameters" syntax!
+                                                                                                                                                                                                          
+┌──(kali㉿kali-mrib)-[/usr/share/wordlists]
+└─$ hydra  -L  /user/share/wordlists/rockyou.txt 
+
+
+
+#####################################################################################################
+#####################################################################################################
+#####################################################################################################
+
+#####################################################################################################
+#####################################################################################################
+#####################################################################################################
+
+1) Descobrir IPs na rede (descoberta de alvos)
+
+netdiscover (ARP passive/active)
+
+netdiscover -i <interface> - modo interactivo/passivo.
+
+netdiscover -r 192.168.1.0/24 -i <interface> - varrimento ARP no range.
+
+arp-scan (rápido e fiável em LAN)
+
+sudo arp-scan --interface=<interface> --localnet
+
+usar tabela ARP do próprio host para verificar vizinhos:
+
+ip neigh ou arp -a
+
+quando a rede for grande, combinar com DNS/LDAP/AD enumeration e serviços de DHCP para mapear endereços atribuídos.
+
+2) Descobrir portos (varrimento de portos)
+
+nmap - comandos exemplares e explicação rápida:
+
+nmap -sS -p- -T4 -Pn -oA scan_full 192.168.1.10
+(SYN scan, todos os portos, timing rápido, não faz ping antes, output em todos os formatos)
+
+nmap -sV -sC -p80,443,22 -T4 -oA scan_services 192.168.1.0/24
+(detecção de versão + scripts default)
+
+nmap -A -O --top-ports 100 10.0.0.0/24
+(agressivo: detecção de serviços, SO e scripts; usar com cuidado)
+
+flags úteis:
+
+-p- - pesquisar todos os 65535 portos.
+
+-sS - SYN stealth scan.
+
+-sT - TCP connect (quando não há privilégios).
+
+-Pn - assume hosts up (útil quando ICMP ou ping bloqueado).
+
+-T0..5 - tempo (T0 mais stealth, T5 mais rápido/ruidoso).
+
+--open - só reporta portos abertos.
+
+-oA nome - guarda output em nome.nmap, nome.xml, nome.gnmap.
+
+masscan - para varrimentos ultra-rápidos em large-scale:
+
+masscan 10.0.0.0/8 -p0-65535 --rate=10000 -oL masscan.out
+
+importar resultados para nmap para validação (nmap -sV -iL targets.txt)
+
+rustscan -  alternativa rápida que pesquisa com nmap:
+
+rustscan -a 192.168.1.10 -- -sV -A

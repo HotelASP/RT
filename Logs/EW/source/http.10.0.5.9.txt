@@ -1,0 +1,426 @@
+<html lang="en"><head>
+  <meta charset="utf-8">
+  <meta content="width=device-width, initial-scale=1.0" name="viewport">
+
+  <title>BancoBemBom</title>
+  <meta content="" name="description">
+  <meta content="" name="keywords">
+
+  <!-- Favicons -->
+  <!--The emoji graphics are from the open source project Twemoji. The graphics are copyright 2020 Twitter, Inc and other contributors. The graphics are licensed under CC-BY 4.0. -->
+  <link href="assets/img/favicon.ico" rel="icon">
+  <link href="../assets/img/apple-touch-icon" rel="apple-touch-icon">
+
+  <!-- Google Fonts -->
+  <link href="../assets/fonts/opensans.css" rel="stylesheet">
+
+  <!-- Vendor CSS Files -->
+  <link href="assets/vendor/aos/aos.css" rel="stylesheet">
+  <link href="assets/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+  <link href="assets/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
+  <link href="assets/vendor/boxicons/css/boxicons.min.css" rel="stylesheet">
+  <link href="assets/vendor/glightbox/css/glightbox.min.css" rel="stylesheet">
+  <link href="assets/vendor/swiper/swiper-bundle.min.css" rel="stylesheet">
+
+  <!-- Template Main CSS File -->
+  <link href="assets/css/style.css" rel="stylesheet">
+
+  <!-- =======================================================
+  * Template Name: BizLand - v3.3.0
+  * Template URL: https://bootstrapmade.com/bizland-bootstrap-business-template/
+  * Author: BootstrapMade.com
+  * License: https://bootstrapmade.com/license/
+  ======================================================== -->
+</head>
+
+<body data-aos-easing="ease-in-out" data-aos-duration="1000" data-aos-delay="0">
+
+  <!-- ======= Header ======= -->
+  <header id="header" class="d-flex align-items-center fixed-top">
+    <div class="container d-flex align-items-center justify-content-between">
+
+      <h1 class="logo"><a href="index.html"><span>BancoBemBom</span></a></h1>
+      <!-- Uncomment below if you prefer to use an image logo -->
+      <!-- <a href="index.html" class="logo"><img src="assets/img/logo.png" alt=""></a>-->
+
+      <nav id="navbar" class="navbar">
+        <ul>
+
+          <li><a class="nav-link scrollto" href="#team">Equipa</a></li>
+          <li><a class="nav-link scrollto" href="#contact">Contacto</a></li>
+          <li><a class="nav-link scrollto" href="login/login.html">Login</a></li>
+        </ul>
+        <i class="bi bi-list mobile-nav-toggle"></i>
+      </nav><!-- .navbar -->
+
+    </div>
+  </header><!-- End Header -->
+
+  <!-- ======= Hero Section ======= -->
+  <section id="hero" class="d-flex align-items-center scrolled-offset">
+    <div class="container aos-init aos-animate" data-aos="zoom-out" data-aos-delay="100">
+      <h1>Bem vindo ao <span>BancoBemBom</span></h1>
+      <h2>Um banco totalmente digital da SpartaCity!</h2>
+      <br>
+      
+      <div class="row">
+
+        <div class="col-lg-6 text-danger text-center">
+          <i class="bi bi-exclamation-triangle" style="font-size: 4rem;"></i>
+            <h4>Neste momento encontramos-nos a mudar de instalações!<br> Aceda à sua conta para ver mais informações.</h4>
+        </div>
+
+      </div>
+
+    </div>
+  </section><!-- End Hero -->
+
+  <main id="main">
+    
+    <!-- ======= Counts Section ======= -->
+    <section id="counts" class="counts">
+      <div class="container aos-init" data-aos="fade-up">
+
+        <div class="row">
+
+          <div class="col-lg-3 col-md-6">
+            <div class="count-box">
+              <i class="bi bi-emoji-smile"></i>
+              <span data-purecounter-start="0" data-purecounter-end="2" data-purecounter-duration="1" class="purecounter">0</span>
+              <p>Clientes Satisfeitos</p>
+            </div>
+          </div>
+
+          <div class="col-lg-3 col-md-6 mt-5 mt-md-0">
+            <div class="count-box">
+              <i class="bi bi-piggy-bank"></i>
+              <span data-purecounter-start="0" data-purecounter-end="12045" data-purecounter-duration="1" class="purecounter">0</span>
+              <p>Contas Abertas</p>
+            </div>
+          </div>
+
+          <div class="col-lg-3 col-md-6 mt-5 mt-lg-0">
+            <div class="count-box">
+              <i class="bi bi-emoji-angry"></i>
+              <span data-purecounter-start="0" data-purecounter-end="4738" data-purecounter-duration="1" class="purecounter">0</span>
+              <p>Reclamações</p>
+            </div>
+          </div>
+
+          <div class="col-lg-3 col-md-6 mt-5 mt-lg-0">
+            <div class="count-box">
+              <i class="bi bi-people"></i>
+              <span data-purecounter-start="0" data-purecounter-end="10" data-purecounter-duration="1" class="purecounter">0</span>
+              <p>Trabalhadores esforçados</p>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+    </section><!-- End Counts Section -->
+
+    <!-- ======= Team Section ======= -->
+    <section id="team" class="team section-bg">
+      <div class="container aos-init" data-aos="fade-up">
+
+        <div class="section-title">
+          <h2>Equipa</h2>
+          <h3>Conheça A Nossa <span>Equipa</span></h3>
+        </div>
+
+        <div class="row">
+
+          <div class="col-lg-3 col-md-6 d-flex align-items-stretch aos-init" data-aos="fade-up" data-aos-delay="100">
+            <div class="member">
+              <div class="member-img">
+                <img src="assets/img/team/team-1.jpg" class="img-fluid" alt="">
+              </div>
+              <div class="member-info">
+                <h4>João Ferreira</h4>
+                <span>Diretor</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-lg-3 col-md-6 d-flex align-items-stretch aos-init" data-aos="fade-up" data-aos-delay="200">
+            <div class="member">
+              <div class="member-img">
+                <img src="assets/img/team/team-2.jpg" class="img-fluid" alt="">
+              </div>
+              <div class="member-info">
+                <h4>Angela Martins</h4>
+                <span>CTO</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-lg-3 col-md-6 d-flex align-items-stretch aos-init" data-aos="fade-up" data-aos-delay="300">
+            <div class="member">
+              <div class="member-img">
+                <img src="assets/img/team/team-3.jpg" class="img-fluid" alt="">
+              </div>
+              <div class="member-info">
+                <h4>Miguel Almeida</h4>
+                <span>Contabilista</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-lg-3 col-md-6 d-flex align-items-stretch aos-init" data-aos="fade-up" data-aos-delay="400">
+            <div class="member">
+              <div class="member-img">
+                <img src="assets/img/team/team-4.jpg" class="img-fluid" alt="">
+              </div>
+              <div class="member-info">
+                <h4>Joana Ferreira</h4>
+                <span>Recursos Humanos</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+    </section><!-- End Team Section -->
+
+    <!-- ======= Pricing Section ======= -->
+    <section id="pricing" class="pricing">
+      <div class="container aos-init" data-aos="fade-up">
+
+        <div class="section-title">
+          <h2>Preçário</h2>
+          <h3>Veja os nossos <span>Produtos</span></h3>
+        </div>
+
+        <div class="row">
+
+          <div class="col-lg-3 col-md-6 mx-auto aos-init" data-aos="fade-up" data-aos-delay="100">
+            <div class="box">
+              <h3>Standard</h3>
+              <h4>0<sup>€<span> / mês</span></sup></h4>
+              <ul>
+                <li>Fácil Utilização</li>
+                <li>Contactless</li>
+                <li class="na">Transferências Estrangeiro</li>
+                <li class="na">Conta Segura</li>
+              </ul>
+              <div class="btn-wrap">
+                <a href="#" class="btn-buy">Comprar</a>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-lg-3 col-md-6 mt-4 mt-md-0 mx-auto aos-init" data-aos="fade-up" data-aos-delay="200">
+            <div class="box featured">
+              <h3>Plus</h3>
+              <h4>20<sup>€</sup><span> / mês</span></h4>
+              <ul>
+                <li>Fácil Utilização</li>
+                <li>Contactless</li>
+                <li>Transferências Estrangeiro</li>
+                <li class="na">Conta Segura</li>
+              </ul>
+              <div class="btn-wrap">
+                <a href="#" class="btn-buy">Comprar agora</a>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-lg-3 col-md-6 mt-4 mt-lg-0 mx-auto aos-init" data-aos="fade-up" data-aos-delay="300">
+            <div class="box">
+              <h3>Premium</h3>
+              <h4>50<sup>€</sup><span> / mês</span></h4>
+              <ul>
+                <li>Fácil Utilização</li>
+                <li>Contactless</li>
+                <li>Transferências Estrangeiro</li>
+                <li>Conta Segura</li>
+              </ul>
+              <div class="btn-wrap">
+                <a href="#" class="btn-buy">Comprar</a>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+    </section><!-- End Pricing Section -->
+
+    <!-- ======= Frequently Asked Questions Section ======= -->
+    <section id="faq" class="faq section-bg">
+      <div class="container aos-init" data-aos="fade-up">
+
+        <div class="section-title">
+          <h2>F.A.Q</h2>
+          <h3>Perguntas <span>Frequentes</span></h3>
+          <p>Abaixo estão algumas das perguntas com mais frequências.</p>
+        </div>
+
+        <div class="row justify-content-center">
+          <div class="col-xl-10">
+            <ul class="faq-list">
+
+              <li>
+                <div data-bs-toggle="collapse" class="collapsed question" href="#faq1">O que são cartões de débito? <i class="bi bi-chevron-down icon-show"></i><i class="bi bi-chevron-up icon-close"></i></div>
+                <div id="faq1" class="collapse" data-bs-parent=".faq-list">
+                  <p>
+                    O cartão de débito é uma forma de pagamento eletrônica que permite a dedução do valor de uma compra diretamente na conta bancária do titular do cartão (corrente ou poupança).
+                  </p>
+                </div>
+              </li>
+
+              <li>
+                <div data-bs-toggle="collapse" href="#faq2" class="collapsed question">O que é o IBAN? <i class="bi bi-chevron-down icon-show"></i><i class="bi bi-chevron-up icon-close"></i></div>
+                <div id="faq2" class="collapse" data-bs-parent=".faq-list">
+                  <p>
+                    O IBAN é um código-padrão internacional para a identificação de contas bancárias. O IBAN é composto, no máximo, por 34 caracteres. Os dois primeiros caracteres correspondem ao país de domiciliação da conta (PT-Portugal, ES-Espanha, DE-Alemanha, etc.). O terceiro e quarto caracteres são de controlo e servem para validação do código do país. Os restantes dígitos correspondem à estrutura de identificação de contas definida para cada país.
+                  </p>
+                </div>
+              </li>
+
+              <li>
+                <div data-bs-toggle="collapse" href="#faq3" class="collapsed question">Poderei fazer pagamentos para fora de Portugal? <i class="bi bi-chevron-down icon-show"></i><i class="bi bi-chevron-up icon-close"></i></div>
+                <div id="faq3" class="collapse" data-bs-parent=".faq-list">
+                  <p>
+                    Sim, caso possua o plano <b>plus</b> ou <b>premium</b>. Desde outubro de 2020 é possível realizar transferências imediatas entre países do espaço SEPA. Porém este serviço é facultativo, pelo que deverá verificar quais são os prestadores de serviços de pagamento aderentes.                  </p>
+                </div>
+              </li>
+
+              <li>
+                <div data-bs-toggle="collapse" href="#faq6" class="collapsed question">Como é a minha palavra passe protegida no plano premium? <i class="bi bi-chevron-down icon-show"></i><i class="bi bi-chevron-up icon-close"></i></div>
+                <div id="faq6" class="collapse" data-bs-parent=".faq-list">
+                  <p>
+                    Para uma maior segurança dos nossos utilizadores no plano <b>premium</b> utilizamos os melhores métodos para encriptar as nossas palavras-passe, assegurando a completa segurança dos nossos clientes premium.
+                  </p>
+                </div>
+              </li>
+
+            </ul>
+          </div>
+        </div>
+
+      </div>
+    </section><!-- End Frequently Asked Questions Section -->
+
+    <!-- ======= Contact Section ======= -->
+    <section id="contact" class="contact">
+      <div class="container aos-init" data-aos="fade-up">
+
+        <div class="section-title">
+          <h2>Contacte Nos</h2>
+          <h3><span>Contacte Nos</span></h3>
+          <p>Caso tenha alguma perguntas sobre <span>BancoBemBom</span> não exite em contactar-nos!</p>
+        </div>
+
+        <div class="row aos-init" data-aos="fade-up" data-aos-delay="100">
+          <div class="col-lg-8 offset-md-2">
+            <form action="forms/contact.php" method="post" role="form" class="php-email-form">
+              <div class="row">
+                <div class="col form-group">
+                  <input type="text" name="name" class="form-control" id="name" placeholder="O Seu Nome" required="">
+                </div>
+                <div class="col form-group">
+                  <input type="email" class="form-control" name="email" id="email" placeholder="O Seu Email" required="">
+                </div>
+              </div>
+              <div class="form-group">
+                <input type="text" class="form-control" name="subject" id="subject" placeholder="Assunto" required="">
+              </div>
+              <div class="form-group">
+                <textarea class="form-control" name="message" rows="5" placeholder="Mensagem" required=""></textarea>
+              </div>
+              <div class="my-3">
+                <div class="loading">Carregando</div>
+                <div class="error-message"></div>
+              </div>
+              <div class="text-center"><button type="submit">Confirmar</button></div>
+            </form>
+          </div>
+
+        </div>
+
+      </div>
+    </section><!-- End Contact Section -->
+
+  </main><!-- End #main -->
+
+  <!-- ======= Footer ======= -->
+  <footer id="footer">
+
+    <div class="footer-newsletter">
+      <div class="container">
+        <div class="row justify-content-center">
+          <div class="col-lg-6">
+            <h4>Subscreva a nossa Newsletter</h4>
+            <p>Para receber as informações mais atuais e noticias sobre BancoBemBom, insira o seu email.</p>
+            <form action="" method="post">
+              <input type="email" name="email"><input type="submit" value="Subscreva">
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-top">
+      <div class="container">
+        <div class="row">
+
+          <div class="col-lg-3 col-md-6 footer-contact">
+            <h3>BancoBemBom</h3>
+            <p><br>
+              <strong>Phone:</strong> +351 000 000 000<br>
+              <strong>Email:</strong> joao@bancobembom.pt<br>
+            </p>
+          </div>
+
+          <div class="col-lg-3 col-md-6 footer-links offset-md-6">
+            <h4>Our Social Networks</h4>
+            
+            <div class="social-links mt-3">
+              <a href="#" class="twitter"><i class="bx bxl-twitter"></i></a>
+              <a href="#" class="facebook"><i class="bx bxl-facebook"></i></a>
+              <a href="#" class="instagram"><i class="bx bxl-instagram"></i></a>
+              <a href="#" class="linkedin"><i class="bx bxl-linkedin"></i></a>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <div class="container py-4">
+      <div class="copyright">
+        © Copyright <strong><span>SpartaCity</span></strong>. All Rights Reserved
+      </div>
+      <div class="credits">
+        <!-- All the links in the footer should remain intact. -->
+        <!-- You can delete the links only if you purchased the pro version. -->
+        <!-- Licensing information: https://bootstrapmade.com/license/ -->
+        <!-- Purchase the pro version with working PHP/AJAX contact form: https://bootstrapmade.com/bizland-bootstrap-business-template/ -->
+        Designed by <a href="https://bootstrapmade.com/">BootstrapMade</a>
+      </div>
+    </div>
+  </footer><!-- End Footer -->
+
+  
+  <a href="#" class="back-to-top d-flex align-items-center justify-content-center"><i class="bi bi-arrow-up-short"></i></a>
+
+  <!-- Vendor JS Files -->
+  <script src="assets/vendor/aos/aos.js"></script>
+  <script src="assets/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+  <script src="assets/vendor/glightbox/js/glightbox.min.js"></script>
+  <script src="assets/vendor/isotope-layout/isotope.pkgd.min.js"></script>
+  <script src="assets/vendor/php-email-form/validate.js"></script>
+  <script src="assets/vendor/purecounter/purecounter.js"></script>
+  <script src="assets/vendor/swiper/swiper-bundle.min.js"></script>
+  <script src="assets/vendor/waypoints/noframework.waypoints.js"></script>
+
+  <!-- Template Main JS File -->
+  <script src="assets/js/main.js"></script>
+
+
+
+
+</body></html>
