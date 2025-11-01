@@ -1,14 +1,18 @@
 cd /home/kali/Desktop/RT
 
-aluno5-tecnico
-Bgh@nyNj0!
-aluno5@tecnicomais.vpn
+## -- fazer com sudo
 
 aluno15-tecnico
 &2CmEfgd6S
 aluno15@tecnicomais.vpn
 
 https://ciberium.cybers3c.pt
+
+## desactivo
+aluno5-tecnico
+Bgh@nyNj0!
+aluno5@tecnicomais.vpn
+
 
 ┌──(root㉿kali-mrib)-[/home/kali/Downloads]
 └─# openvpn sslvpn-aluno5-tecnico-client-config.ovpn 
