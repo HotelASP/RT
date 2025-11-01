@@ -83,6 +83,8 @@ DEFAULTS: Dict[str, object] = {
     "RATE": int(os.environ.get("PORTSCAN_RATE", "0")),  # [AUTO]Zero disables rate limiting
 }
 
+TOP_PORTS_FILENAME = "top-ports.txt"
+
 SCAPY_CONCURRENCY_LIMIT: int = max(1, int(os.environ.get("PORTSCAN_SCAPY_MAX_CONCURRENCY", "256")))
 
 FD_LIMIT_SAFETY_MARGIN: int = 32
@@ -271,6 +273,53 @@ def normalize_concurrency_for_mode(requested_concurrency: int, selected_mode: st
         return adjusted_value, message
 
     return adjusted_value, None
+
+# [AUTO]Load the top ports list and return the requested number of entries.
+def load_top_ports_from_file(max_ports: int, explicit_path: Optional[str] = None) -> List[int]:
+
+    if max_ports <= 0:
+        return []
+
+    if explicit_path:
+        resolved_path = explicit_path
+    else:
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+        resolved_path = os.path.join(script_directory, TOP_PORTS_FILENAME)
+
+    ports: List[int] = []
+    seen: Set[int] = set()
+
+    try:
+        with open(resolved_path, "r", encoding="utf-8", errors="ignore") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+
+                token = line.split()[0]
+                try:
+                    port = int(token)
+                except ValueError:
+                    continue
+
+                if port < 1 or port > 65535:
+                    continue
+                if port in seen:
+                    continue
+
+                seen.add(port)
+                ports.append(port)
+                if len(ports) >= max_ports:
+                    break
+    except FileNotFoundError:
+        print(f"Top ports file not found: {resolved_path}")
+        return []
+    except Exception as exc:
+        print(f"Error reading top ports file {resolved_path}: {exc}")
+        return []
+
+    return ports
+
 
 # [AUTO]Translate CLI port expressions into a validated, sorted list.
 def parse_port_specification(start_port: int, end_port: int, port_spec: Optional[str]) -> List[int]:
@@ -898,6 +947,19 @@ def build_cli_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--top-ports",
+        type=int,
+        metavar="COUNT",
+        help="Use first COUNT entries from top-ports.txt (overrides start/end/--ports)."
+    )
+
+    parser.add_argument(
+        "--top-ports-file",
+        dest="top_ports_file",
+        help="Optional path to a custom top ports file (default: bundled top-ports.txt)."
+    )
+
+    parser.add_argument(
         "-c", "--concurrency",
         type=int,
         default=int(DEFAULTS["CONCURRENCY"]),
@@ -1055,7 +1117,22 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
     )
     show_only_open_in_terminal = bool(getattr(parsed_arguments, "show_only_open", False))
 
-    ports_selected_for_scan = parse_port_specification(parsed_arguments.start, parsed_arguments.end, parsed_arguments.ports)
+    top_ports_requested: Optional[int] = getattr(parsed_arguments, "top_ports", None)
+    ports_selected_for_scan: List[int]
+    if top_ports_requested is not None:
+        if parsed_arguments.ports:
+            print("[info] --top-ports supplied; ignoring --ports specification.")
+        print("[info] Using top ports list; ignoring --start/--end range.")
+        ports_selected_for_scan = load_top_ports_from_file(
+            top_ports_requested,
+            getattr(parsed_arguments, "top_ports_file", None),
+        )
+    else:
+        ports_selected_for_scan = parse_port_specification(
+            parsed_arguments.start,
+            parsed_arguments.end,
+            parsed_arguments.ports,
+        )
     if not ports_selected_for_scan:
         print("No ports selected.")
         sys.exit(1)
