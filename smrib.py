@@ -84,6 +84,7 @@ DEFAULTS: Dict[str, object] = {
 }
 
 TOP_PORTS_FILENAME = "top-ports.txt"
+DEFAULT_BATCH_BATTERY_TOP_PORTS = 200
 
 SCAPY_CONCURRENCY_LIMIT: int = max(1, int(os.environ.get("PORTSCAN_SCAPY_MAX_CONCURRENCY", "256")))
 
@@ -1082,9 +1083,12 @@ def build_cli_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--batch-battery",
-        metavar="TARGETS_FILE",
+        metavar="TARGETS_OR_COUNT",
         dest="batch_batter",
-        help="Run a compact test battery against targets listed in TARGETS_FILE."
+        help=(
+            "Run a compact test battery. Provide a targets file or an integer COUNT to "
+            "use the --targets argument with the top ports list."
+        )
     )
 
     parser.add_argument(
@@ -1334,13 +1338,110 @@ def run_batch_from_file(spec_file: str) -> None:
                 continue
             run_full_scan(args)
 
+def determine_batch_battery_ports(
+    base_arguments: argparse.Namespace,
+    top_ports_override: Optional[int],
+) -> List[int]:
+
+    explicit_ports = getattr(base_arguments, "ports", None)
+    top_ports_file_override = getattr(base_arguments, "top_ports_file", None)
+    if explicit_ports:
+        ports = parse_port_specification(base_arguments.start, base_arguments.end, explicit_ports)
+        if ports:
+            print(
+                f"[TEST] Using {len(ports)} port(s) from --ports specification for batch battery."
+            )
+        else:
+            print("[TEST] --ports specification produced no valid ports for batch battery.")
+        return ports
+
+    top_ports_requested = getattr(base_arguments, "top_ports", None)
+    if top_ports_requested is not None:
+        count = int(top_ports_requested)
+        if count <= 0:
+            count = DEFAULT_BATCH_BATTERY_TOP_PORTS
+        ports = load_top_ports_from_file(count, top_ports_file_override)
+        print(
+            f"[TEST] Using top {len(ports)} ports from the top ports file for batch battery."
+        )
+        return ports
+
+    if top_ports_override is not None:
+        count = int(top_ports_override)
+        if count <= 0:
+            count = DEFAULT_BATCH_BATTERY_TOP_PORTS
+        ports = load_top_ports_from_file(count, top_ports_file_override)
+        print(
+            f"[TEST] Using top {len(ports)} ports requested via --batch-battery ({count})."
+        )
+        return ports
+
+    start_default = int(DEFAULTS["START"])
+    end_default = int(DEFAULTS["END"])
+    if base_arguments.start != start_default or base_arguments.end != end_default:
+        ports = parse_port_specification(base_arguments.start, base_arguments.end, None)
+        print(
+            f"[TEST] Using port range {base_arguments.start}-{base_arguments.end} for batch battery."
+        )
+        return ports
+
+    ports = load_top_ports_from_file(
+        DEFAULT_BATCH_BATTERY_TOP_PORTS,
+        top_ports_file_override,
+    )
+    if ports:
+        print(
+            f"[TEST] Using default top {len(ports)} ports list from the top ports file for batch battery."
+        )
+        return ports
+
+    ports = parse_port_specification(base_arguments.start, base_arguments.end, None)
+    if ports:
+        print(
+            f"[TEST] Top ports file unavailable; falling back to range {base_arguments.start}-{base_arguments.end}."
+        )
+    else:
+        print("[TEST] No ports available for batch battery.")
+    return ports
+
+
 # [AUTO]Execute a compact verification suite against provided targets.
 def run_batch_batter(targets_file: str,
                      base_arguments: argparse.Namespace) -> None:
 
-    targets_list = read_targets_from_file(targets_file)
-    if not targets_list:
-        print("No targets found in test file.")
+    top_ports_override_from_batch: Optional[int] = None
+    normalized_path = os.path.expanduser(str(targets_file))
+    targets_list: List[str]
+
+    if os.path.isfile(normalized_path):
+        try:
+            targets_list = read_targets_from_file(normalized_path)
+        except Exception as exc:
+            print(f"Error reading targets file {normalized_path}: {exc}")
+            return
+        if not targets_list:
+            print("No targets found in test file.")
+            return
+    else:
+        try:
+            top_ports_override_from_batch = int(str(targets_file))
+        except (TypeError, ValueError):
+            print(f"Targets file not found: {targets_file}")
+            return
+        targets_list = expand_targets_to_list(base_arguments.targets)
+        if not targets_list:
+            print("No targets found from --targets argument.")
+            return
+        print(
+            f"[TEST] Using targets supplied via --targets ({len(targets_list)} entries)."
+        )
+
+    selected_ports_for_battery = determine_batch_battery_ports(
+        base_arguments,
+        top_ports_override_from_batch,
+    )
+    if not selected_ports_for_battery:
+        print("No ports selected for batch battery.")
         return
 
     fast_mode_adjustments = apply_fast_mode_overrides(base_arguments)
@@ -1361,9 +1462,9 @@ def run_batch_batter(targets_file: str,
             print(f"[fast] {guardrail_notice}")
         print("[fast] Private and internal networks are included automatically during the battery.")
 
-    test_ports_connect = [21, 22, 80, 443]
-    test_ports_syn = [21, 22, 80, 443]
-    test_ports_udp = [53]
+    test_ports_connect = selected_ports_for_battery
+    test_ports_syn = selected_ports_for_battery
+    test_ports_udp = selected_ports_for_battery
 
     aggregated_open_results: List[Dict[str, object]] = []
     aggregated_all_results: List[Dict[str, object]] = []
@@ -1500,6 +1601,7 @@ def run_batch_batter(targets_file: str,
     )
 
     timestamp_for_auto_files = ts_utc_compact()
+
     if base_arguments.csv:
         csv_filename = base_arguments.csv if base_arguments.csv != "AUTO" else f"test_csv_{timestamp_for_auto_files}.csv"
         write_results_to_csv(csv_filename, rows_for_persistence)
@@ -1510,6 +1612,7 @@ def run_batch_batter(targets_file: str,
     print(f"TEST end={utc_now_str()} open_found={len(aggregated_open_results)}")
 
 # [AUTO]Entry point bridging CLI parsing and execution modes.
+
 def main() -> None:
 
     cli_parser = build_cli_parser()
