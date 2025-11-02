@@ -2,6 +2,16 @@
 
 `smrib.py` is an asyncio-powered reconnaissance utility that supports TCP connect scans, TCP SYN probing, UDP probes, batch execution, and web directory discovery. It can write results to CSV/JSON, capture packets, and grab banners where supported.
 
+The script is safe to run with no arguments: `python3 smrib.py` will automatically scan the default target host with default timing parameters. Those defaults can be overridden by environment variables or the command-line flags described below.
+
+## Quick start
+
+```bash
+python3 smrib.py
+```
+
+Running the tool exactly as shown performs a TCP connect scan against `hackthissite.org` (or the value of `PORTSCAN_HOST`), enumerating ports 1 through 1,024 with a concurrency of 100, a timeout of 0.3 seconds, and no per-host rate limiting. All of these values come from the defaults baked into the script and can be tuned by setting `PORTSCAN_*` environment variables or passing explicit flags.
+
 ## Prerequisites
 
 - Python 3.8+
@@ -22,6 +32,40 @@ Display the full CLI documentation:
 python3 smrib.py --help
 ```
 
+## Default configuration and parameters
+
+The table below summarises the most commonly adjusted parameters, their default values, and the environment variables that override them before command-line parsing occurs.
+
+| Flag | Purpose | Default | Environment variable |
+|------|---------|---------|----------------------|
+| `--targets` | Hostname, IP address, CIDR block, or file containing one target per line. | `hackthissite.org` | `PORTSCAN_HOST` |
+| `--start` | Inclusive start of the port range. | `1` | `PORTSCAN_START` |
+| `--end` | Inclusive end of the port range. | `1024` | `PORTSCAN_END` |
+| `--ports` | Explicit list of ports/ranges (overrides `--start/--end`). | `None` | n/a |
+| `--top-ports` | Use the top *n* entries from a popularity list. | `None` | n/a |
+| `--concurrency` | Maximum simultaneous socket operations per host. | `100` | `PORTSCAN_CONCURRENCY` |
+| `--timeout` | Socket/probe timeout in seconds. | `0.3` | `PORTSCAN_TIMEOUT` |
+| `--rate` | Per-host operations per second (`0` disables the limiter). | `0` | `PORTSCAN_RATE` |
+| `--retries` | Retry attempts for SYN/UDP probes. | `1` | n/a |
+| `--retry-backoff` | Exponential backoff base in seconds between retries. | `0.2` | n/a |
+| `--fast` | Enables aggressive mode tuning (see below). | `False` | n/a |
+
+All other CLI switches fall back to sane defaults (`False` for boolean toggles, no output files unless requested). Any combination of flags can be supplied alongside the defaults; unspecified options keep their default values.
+
+### What `--fast` mode changes
+
+Fast mode increases concurrency (subject to file descriptor guardrails), caps timeouts to 0.3 seconds, disables banner collection and retries, prefers SYN scanning when allowed, shuffles port order, and scans private/internal targets as-is. The terminal output will confirm the effective settings whenever `--fast` is used.
+
+## How the code is organised
+
+- **Argument parsing:** `build_cli_parser()` defines the command-line interface and wires default values from the `DEFAULTS` dictionary. Running without parameters simply produces a namespace populated by those defaults.
+- **Scan orchestration:** `run_full_scan()` resolves targets, normalises concurrency, prepares optional packet captures, and launches the asynchronous scanning tasks. It coordinates output to the terminal and optional CSV/JSON/PCAP files.
+- **Asynchronous workers:** `scan_all_selected_ports_for_host()` schedules one coroutine per port, honouring concurrency semaphores and the rate limiter (`FixedRateLimiter`). Depending on the selected mode (`connect`, `syn`, or `udp`), it delegates to the appropriate probe function.
+- **Protocol handlers:** `scan_tcp_connect_once()`, `scan_tcp_syn_once()`, and `scan_udp_once()` implement the actual network operations. SYN/UDP functionality relies on Scapy when installed.
+- **Batch features:** `run_batch_from_file()` and `run_batch_battery()` allow you to supply multiple runs in a specification file, reusing the same argument parser to ensure identical validation.
+
+These entry points are heavily commented in the source file to assist new users who want to explore or extend the scanner.
+
 ## Core options
 
 - `--targets` accepts an IP, hostname, CIDR, or filename containing one target per line.
@@ -33,6 +77,8 @@ python3 smrib.py --help
 - `--rate`, `--concurrency`, `--timeout`, `--retries`, and `--retry-backoff` control performance and resilience.
 - `--fast` activates an aggressive profile that automatically tunes timeouts, concurrency, and mode selection for speed.
 - `--batch`, `--batch-battery`, and `--web-dir` activate the specialized workflows described in the examples below.
+
+For quick experiments, you can export environment variables once (for example, `export PORTSCAN_HOST=scanme.nmap.org`) and then run `python3 smrib.py` repeatedly without retyping the host.
 
 ## End-to-end examples
 
@@ -77,6 +123,14 @@ python3 smrib.py --targets 10.0.5.5 --ports "22,80,443,100-200" --fast --show-cl
 ```
 
 **What it does:** Applies the aggressive fast profile, randomizes port order, prints closed ports to the terminal, and saves a CSV summary.
+
+### 5a. Running with defaults only
+
+```bash
+python3 smrib.py
+```
+
+**What it does:** Scans `hackthissite.org` on ports 1–1024 using connect mode with concurrency 100, timeout 0.3 seconds, and no rate limit. Adjust `PORTSCAN_*` variables or CLI flags to change these values.
 
 ### 6. Batch-driven multi-run execution
 

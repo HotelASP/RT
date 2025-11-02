@@ -74,8 +74,11 @@ except Exception:
     SCAPY_AVAILABLE = False
 
 
+# Default runtime configuration when smrib.py is invoked with no CLI flags.
+# Environment variables named PORTSCAN_* can override each entry before
+# command-line parsing applies further changes.
 DEFAULTS: Dict[str, object] = {
-    "HOST": os.environ.get("PORTSCAN_HOST", "137.74.187.102"),
+    "HOST": os.environ.get("PORTSCAN_HOST", "hackthissite.org"),
     "START": int(os.environ.get("PORTSCAN_START", "1")),
     "END": int(os.environ.get("PORTSCAN_END", "1024")),
     "CONCURRENCY": int(os.environ.get("PORTSCAN_CONCURRENCY", "100")),
@@ -961,28 +964,34 @@ def run_web_directory_listing_tool(base_url: Optional[str],
 def build_cli_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
-        description="Readable async port scanner (asyncio + optional Scapy)"
+        description=(
+            "Readable async port scanner (asyncio + optional Scapy). "
+            "Running without CLI flags uses the default target and timings listed per option."
+        )
     )
 
     parser.add_argument(
         "--targets",
         required=False,
         default=str(DEFAULTS["HOST"]),
-        help="Host/IP/CIDR or a file with one target per line."
+        help=(
+            "Host/IP/CIDR or a file with one target per line. "
+            "Default: %(default)s (override via PORTSCAN_HOST)."
+        )
     )
 
     parser.add_argument(
         "--start",
         type=int,
         default=int(DEFAULTS["START"]),
-        help="Start port (inclusive)."
+        help="Start port (inclusive). Default: %(default)s (PORTSCAN_START)."
     )
 
     parser.add_argument(
         "--end",
         type=int,
         default=int(DEFAULTS["END"]),
-        help="End port (inclusive)."
+        help="End port (inclusive). Default: %(default)s (PORTSCAN_END)."
     )
 
     parser.add_argument(
@@ -1007,14 +1016,14 @@ def build_cli_parser() -> argparse.ArgumentParser:
         "-c", "--concurrency",
         type=int,
         default=int(DEFAULTS["CONCURRENCY"]),
-        help="Per-host concurrency."
+        help="Per-host concurrency. Default: %(default)s (PORTSCAN_CONCURRENCY)."
     )
 
     parser.add_argument(
         "--timeout",
         type=float,
         default=float(DEFAULTS["TIMEOUT"]),
-        help="Socket and probe timeout in seconds."
+        help="Socket and probe timeout in seconds. Default: %(default)s (PORTSCAN_TIMEOUT)."
     )
 
     parser.add_argument(
@@ -1067,7 +1076,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
         "--rate",
         type=int,
         default=int(DEFAULTS["RATE"]),
-        help="Ops per second per host (0 = unlimited)."
+        help="Ops per second per host (0 = unlimited). Default: %(default)s (PORTSCAN_RATE)."
     )
 
     parser.add_argument(
@@ -1075,7 +1084,8 @@ def build_cli_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Enable the fastest scanning profile. Forces high concurrency, low timeouts, "
-            "SYN mode when possible, disables banners/retries, and skips non-external hosts."
+            "prefers SYN mode when possible, disables banners/retries, and automatically "
+            "includes private/internal targets."
         ),
     )
 
