@@ -77,6 +77,8 @@ except Exception:
 # Default runtime configuration when smrib.py is invoked with no CLI flags.
 # Environment variables named PORTSCAN_* can override each entry before
 # command-line parsing applies further changes.
+PORTSCAN_TIMEOUT_ENV_SET: bool = "PORTSCAN_TIMEOUT" in os.environ
+
 DEFAULTS: Dict[str, object] = {
     "HOST": os.environ.get("PORTSCAN_HOST", "hackthissite.org"),
     "START": int(os.environ.get("PORTSCAN_START", "1")),
@@ -97,6 +99,21 @@ SCAPY_CONCURRENCY_LIMIT: int = max(1, int(os.environ.get("PORTSCAN_SCAPY_MAX_CON
 FD_LIMIT_SAFETY_MARGIN: int = 32
 
 FAST_MODE_MIN_CONCURRENCY: int = 1024
+
+
+class StoreValueAndMarkExplicit(argparse.Action):
+    """argparse action that records whether a CLI option was provided explicitly."""
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: Any,
+        option_string: Optional[str] = None,
+    ) -> None:
+        setattr(namespace, self.dest, values)
+        setattr(namespace, f"{self.dest}_explicit", True)
+
 # Return the soft RLIMIT_NOFILE value when available.
 def query_process_fd_soft_limit() -> Optional[int]:
 
@@ -212,7 +229,10 @@ def apply_fast_mode_overrides(parsed_arguments: argparse.Namespace) -> Optional[
         )
 
     configured_timeout = float(getattr(parsed_arguments, "timeout", 0.0))
-    if configured_timeout <= 0.0:
+    timeout_explicit = bool(getattr(parsed_arguments, "timeout_explicit", False))
+    if timeout_explicit and configured_timeout > 0.0:
+        optimized_timeout = configured_timeout
+    elif configured_timeout <= 0.0:
         optimized_timeout = 0.3
     else:
         optimized_timeout = min(configured_timeout, 0.3)
@@ -1031,10 +1051,12 @@ def build_cli_parser() -> argparse.ArgumentParser:
         help="Per-host concurrency. Default: %(default)s (PORTSCAN_CONCURRENCY)."
     )
 
+    parser.set_defaults(timeout_explicit=PORTSCAN_TIMEOUT_ENV_SET)
     parser.add_argument(
         "--timeout",
         type=float,
         default=float(DEFAULTS["TIMEOUT"]),
+        action=StoreValueAndMarkExplicit,
         help="Socket and probe timeout in seconds. Default: %(default)s (PORTSCAN_TIMEOUT)."
     )
 
