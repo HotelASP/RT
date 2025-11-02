@@ -821,12 +821,21 @@ def start_pcap_sniffer_for_host(filter_expression: Optional[str] = None) -> Any:
     except Exception:
         return None
 
+def ensure_parent_directory_exists(file_path: str) -> None:
+    """Create the parent directory for *file_path* when it is missing."""
+
+    directory = os.path.dirname(os.path.abspath(file_path))
+    if directory and not os.path.isdir(directory):
+        os.makedirs(directory, exist_ok=True)
+
+
 def stop_sniffer_and_write_pcap(sniffer: Any, pcap_filename: str) -> None:
     # [AUTO]Terminate a running sniffer and persist packets to disk.
 
     if sniffer is None:
         return
     try:
+        ensure_parent_directory_exists(pcap_filename)
         captured_packets = sniffer.stop()
         scapy.wrpcap(pcap_filename, captured_packets if captured_packets else [])
     except Exception as exc:
@@ -837,6 +846,7 @@ def write_results_to_csv(csv_path: str, result_rows: List[Dict[str, object]]) ->
     # [AUTO]Emit scanner results in a tabular CSV format.
 
     try:
+        ensure_parent_directory_exists(csv_path)
         with open(csv_path, mode="w", newline="") as fh:
             writer = csv.writer(fh)
             writer.writerow(["host", "port", "proto", "status", "note", "time_utc", "duration_ms"])
@@ -858,6 +868,7 @@ def write_results_to_json(json_path: str, result_rows: List[Dict[str, object]]) 
     # [AUTO]Persist scanner results as structured JSON.
 
     try:
+        ensure_parent_directory_exists(json_path)
         with open(json_path, mode="w") as fh:
             json.dump(result_rows, fh, indent=2)
         print(f"json -> {json_path}")
