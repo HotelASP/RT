@@ -12,4 +12,4 @@ venv/
 configs/
 git-update-local.sh
 git-update-remote.sh
-
+logs/
