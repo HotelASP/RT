@@ -740,12 +740,23 @@ async def scan_all_selected_ports_for_host(target_ip: str,
                 note_suffix = f" {note}" if note else ""
                 print(f"# {timestamp}\t| {host}:{port}/{proto}\t= {status}{note_suffix} [{duration_ms}ms]")
 
+            banner_text: str = ""
+            if (
+                selected_mode == "connect"
+                and banner_enabled
+                and status == "open"
+                and isinstance(note, str)
+                and note
+            ):
+                banner_text = note
+
             record: Dict[str, object] = {
                 "host": host,
                 "port": port,
                 "proto": proto,
                 "status": status,
                 "note": note,
+                "banner": banner_text,
                 "time": timestamp,
                 "duration_ms": duration_ms,
             }
@@ -852,7 +863,7 @@ def write_results_to_csv(csv_path: str, result_rows: List[Dict[str, object]]) ->
         ensure_parent_directory_exists(csv_path)
         with open(csv_path, mode="w", newline="") as fh:
             writer = csv.writer(fh)
-            writer.writerow(["host", "port", "proto", "status", "note", "time_utc", "duration_ms"])
+            writer.writerow(["host", "port", "proto", "status", "note", "banner", "time_utc", "duration_ms"])
             for rec in result_rows:
                 writer.writerow([
                     rec.get("host", ""),
@@ -860,6 +871,7 @@ def write_results_to_csv(csv_path: str, result_rows: List[Dict[str, object]]) ->
                     rec.get("proto", ""),
                     rec.get("status", ""),
                     rec.get("note", ""),
+                    rec.get("banner", ""),
                     rec.get("time", ""),
                     rec.get("duration_ms", ""),
                 ])
