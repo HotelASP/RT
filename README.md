@@ -2,7 +2,7 @@
 
 `smrib.py` is an asyncio-powered reconnaissance utility that supports TCP connect scans, TCP SYN probing, UDP probes, batch execution, and web directory discovery. It can write results to CSV/JSON, capture packets, and grab banners where supported.
 
-The script is safe to run with no arguments: `python3 smrib.py` will automatically scan the default target host with default timing parameters. Those defaults can be overridden by environment variables or the command-line flags described below.
+The script is safe to run with no arguments: `python3 smrib.py` will automatically scan the default target host using the baked-in timing parameters **and** enable a helpful baseline profile (`--show-only-open`, `--banner`, `--top-ports 100`, `--csv logs/results.csv`, and `--json logs/results.json`). Those defaults can be overridden by environment variables or the command-line flags described below.
 
 ## Quick start
 
@@ -10,7 +10,7 @@ The script is safe to run with no arguments: `python3 smrib.py` will automatical
 python3 smrib.py
 ```
 
-Running the tool exactly as shown performs a TCP connect scan against `hackthissite.org` (or the value of `PORTSCAN_HOST`), enumerating ports 1 through 1,024 with a concurrency of 100, a timeout of 0.3 seconds, and no per-host rate limiting. All of these values come from the defaults baked into the script and can be tuned by setting `PORTSCAN_*` environment variables or passing explicit flags.
+Running the tool exactly as shown performs a TCP connect scan against `hackthissite.org` (or the value of `PORTSCAN_HOST`), enumerating the top 100 ports while grabbing banners, showing only the open results in the terminal, and saving structured CSV/JSON output to `logs/results.*`. Concurrency defaults to 100, the timeout to 0.3 seconds, and the rate limiter remains disabled. All of these values come from the defaults baked into the script and can be tuned by setting `PORTSCAN_*` environment variables or passing explicit flags.
 
 ## Prerequisites
 
@@ -50,7 +50,7 @@ The table below summarises the most commonly adjusted parameters, their default 
 | `--retry-backoff` | Exponential backoff base in seconds between retries. | `0.2` | n/a |
 | `--fast` | Enables aggressive mode tuning (see below). | `False` | n/a |
 
-All other CLI switches fall back to sane defaults (`False` for boolean toggles, no output files unless requested). Any combination of flags can be supplied alongside the defaults; unspecified options keep their default values.
+All other CLI switches fall back to sane defaults (`False` for boolean toggles, no output files unless requested). When you launch the tool with no parameters, SMRIB automatically enables `--show-only-open`, `--banner`, `--top-ports 100`, `--csv logs/results.csv`, and `--json logs/results.json` to provide a rich out-of-the-box experience. Any combination of flags can be supplied alongside the defaults; unspecified options keep their default values.
 
 ### What `--fast` mode changes
 
@@ -130,7 +130,7 @@ python3 smrib.py --targets 10.0.5.5 --ports "22,80,443,100-200" --fast --show-cl
 python3 smrib.py
 ```
 
-**What it does:** Scans `hackthissite.org` on ports 1–1024 using connect mode with concurrency 100, timeout 0.3 seconds, and no rate limit. Adjust `PORTSCAN_*` variables or CLI flags to change these values.
+**What it does:** Scans `hackthissite.org` across the top 100 ports using connect mode with concurrency 100, timeout 0.3 seconds, banner grabbing enabled, and the terminal restricted to open findings. Results are persisted automatically to `logs/results.csv` and `logs/results.json`. Adjust `PORTSCAN_*` variables or CLI flags to change these values.
 
 ### 6. Batch-driven multi-run execution
 

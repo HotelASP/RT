@@ -1669,7 +1669,22 @@ def run_batch_batter(targets_file: str,
 def main() -> None:
 
     cli_parser = build_cli_parser()
-    args = cli_parser.parse_args()
+
+    provided_arguments = sys.argv[1:]
+    if not provided_arguments:
+        implicit_defaults = [
+            "--show-only-open",
+            "--banner",
+            "--top-ports",
+            "100",
+            "--csv",
+            "logs/results.csv",
+            "--json",
+            "logs/results.json",
+        ]
+        args = cli_parser.parse_args(implicit_defaults)
+    else:
+        args = cli_parser.parse_args(provided_arguments)
 
     if getattr(args, "web_dir", False):
         success = run_web_directory_listing_tool(args.url, args.wordlist)
