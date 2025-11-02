@@ -7,7 +7,7 @@
 #
 # 1. Targeted TCP connect sweep with banner capture and explicit artifact names.
 #    *** PCAP needs root ***
-#    Command: sudo python3 smrib.py --targets 'configs/targets_hotelasp.txt' --ports "21,22,80,443" --banner --csv 'logs/log_hotelasp.csv' --json 'logs/log_hotelasp.json' --pcap 'logs/log_hotelasp.pcap'
+#    Command: sudo python3 smrib.py --targets 'targets.txt' --ports "21,22,80,443" --banner --csv 'logs/results.csv' --json 'logs/results.json' --pcap 'logs/results.pcap'
 #    Outcome: establishes full TCP sessions, captures available TLS banners, and stores results in the requested CSV/JSON/PCAP files.
 #
 # 2. High-concurrency TCP SYN reconnaissance respecting rate guards.
@@ -23,19 +23,19 @@
 #    Outcome: verifies NTP listener availability, persisting responses into a CSV report.
 #
 # 5. Fast mode acceleration with shuffled ports and automatic adjustments.
-#    Command: sudo python3 smrib.py --targets 10.0.5.5  --ports "22,80,443,100-200" --fast --show-closed-terminal --csv 'logs/log_fast_10_0_5_5.csv'
+#    Command: sudo python3 smrib.py --targets 10.0.5.5  --ports "22,80,443,100-200" --fast --show-closed-terminal --csv 'logs/log_fast.csv'
 #    Outcome: enforces aggressive timeouts, disables banners, randomizes port order, and exports a JSON summary including closed ports.
 #
 # 6. Batch-driven multi-run execution from specification file.
-#    Command: sudo python3 smrib.py --batch 'configs/batch_10_0_5_0.txt'
+#    Command: sudo python3 smrib.py --batch batch.txt
 #    Outcome: iterates through each valid CLI line inside runspec.txt, executing scans sequentially.
 #
 # 7. Compact diagnostic battery against a list of endpoints.
-#    Command: sudo python3 smrib.py --batch-battery targets_hotelasp.txt --csv 'Logs/batch_battery_hotelasp.csv' --json 'Logs/batch_battery_hotelasp.json'
+#    Command: sudo python3 smrib.py --batch-battery targets.txt --csv 'logs/batch_battery.csv' --json 'logs/batch_battery.json'
 #    Outcome: conducts TCP connect, SYN, and UDP checks where permitted, consolidating the diagnostic results.
 #
 # 8. Web directory listing helper using HTTP wordlists.
-#    Command: sudo python3 smrib.py --web-dir --url https://hotelasp.com --wordlist 'configs/webdir_wordlist.txt'
+#    Command: sudo python3 smrib.py --web-dir --url http://www.hackthissite.org --wordlist 'data/webdir_wordlist.txt'
 #    Outcome: probes candidate paths from the wordlist and prints discovered HTTP status codes.
 
 from __future__ import annotations

@@ -135,15 +135,15 @@ python3 smrib.py
 ### 6. Batch-driven multi-run execution
 
 ```bash
-python3 smrib.py --batch batch_10_0_5_0.txt
+python3 smrib.py --batch batch.txt
 ```
 
-**What it does:** Reads each non-comment line in `batch_10_0_5_0.txt` as a full CLI invocation and executes the scans sequentially.
+**What it does:** Reads each non-comment line in `batch.txt` as a full CLI invocation and executes the scans sequentially.
 
 ### 7. Compact diagnostic battery across a target list
 
 ```bash
-python3 smrib.py --batch-battery targets_hotelasp.txt --csv Logs/batch_battery_hotelasp.csv --json Logs/batch_battery_hotelasp.json
+python3 smrib.py --batch-battery targets.txt --csv logs/batch_battery.csv --json logs/batch_battery.json
 ```
 
 **What it does:** Runs a curated set of TCP connect, SYN, and UDP checks (where permitted) against every entry in the target file, consolidating the results.
@@ -151,7 +151,7 @@ python3 smrib.py --batch-battery targets_hotelasp.txt --csv Logs/batch_battery_h
 ### 8. Web directory enumeration helper
 
 ```bash
-python3 smrib.py --web-dir --url https://hotelasp.com --wordlist webdir_wordlist.txt
+python3 smrib.py --web-dir --url https://hotelasp.com --wordlist 'data/webdir_wordlist.txt'
 ```
 
 **What it does:** Iterates through the supplied wordlist, requesting each path relative to the URL and printing the observed HTTP status codes.
