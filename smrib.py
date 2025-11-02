@@ -909,6 +909,17 @@ def stop_sniffer_and_write_pcap(sniffer: Any, pcap_filename: str) -> None:
         print(f"Failed to write pcap {pcap_filename}: {type(exc).__name__}")
 
 
+def _filter_open_results(result_rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    """Return only records whose status marks the port as open."""
+
+    open_rows: List[Dict[str, object]] = []
+    for record in result_rows:
+        status = record.get("status")
+        if isinstance(status, str) and status.lower() == "open":
+            open_rows.append(record)
+    return open_rows
+
+
 def write_results_to_csv(csv_path: str, result_rows: List[Dict[str, object]]) -> None:
     # [AUTO]Emit scanner results in a tabular CSV format.
 
@@ -917,7 +928,7 @@ def write_results_to_csv(csv_path: str, result_rows: List[Dict[str, object]]) ->
         with open(csv_path, mode="w", newline="") as fh:
             writer = csv.writer(fh)
             writer.writerow(["host", "port", "proto", "status", "note", "banner", "time_utc", "duration_ms"])
-            for rec in result_rows:
+            for rec in _filter_open_results(result_rows):
                 writer.writerow([
                     rec.get("host", ""),
                     rec.get("port", ""),
@@ -938,7 +949,7 @@ def write_results_to_json(json_path: str, result_rows: List[Dict[str, object]]) 
     try:
         ensure_parent_directory_exists(json_path)
         with open(json_path, mode="w") as fh:
-            json.dump(result_rows, fh, indent=2)
+            json.dump(_filter_open_results(result_rows), fh, indent=2)
         print(f"json -> {json_path}")
     except Exception as exc:
         print(f"Failed to write JSON: {type(exc).__name__}")
