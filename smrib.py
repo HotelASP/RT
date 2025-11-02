@@ -49,6 +49,7 @@ import ipaddress
 import json
 import os
 import random
+import re
 import shlex
 import socket
 import sys
@@ -369,37 +370,59 @@ def load_top_ports_from_file(max_ports: int, explicit_path: Optional[str] = None
     return ports
 
 
+PORT_RANGE_TOKEN_PATTERN = re.compile(r"^\s*(\d*)\s*(?:-|:|\.\.)\s*(\d*)\s*$")
+
+
+def _expand_port_token(token: str, default_start: int, default_end: int) -> List[int]:
+
+    token = token.strip()
+    if not token:
+        return []
+
+    range_match = PORT_RANGE_TOKEN_PATTERN.match(token)
+    if range_match:
+        left_text, right_text = range_match.groups()
+        try:
+            start_value = int(left_text) if left_text else default_start
+        except ValueError:
+            start_value = default_start
+        try:
+            end_value = int(right_text) if right_text else default_end
+        except ValueError:
+            end_value = default_end
+
+        if start_value > end_value:
+            start_value, end_value = end_value, start_value
+
+        return list(range(start_value, end_value + 1))
+
+    try:
+        single_value = int(token)
+    except ValueError:
+        return []
+
+    return [single_value]
+
+
 # [AUTO]Translate CLI port expressions into a validated, sorted list.
 def parse_port_specification(start_port: int, end_port: int, port_spec: Optional[str]) -> List[int]:
 
+    sanitized_start = max(1, min(65535, int(start_port)))
+    sanitized_end = max(1, min(65535, int(end_port)))
+    if sanitized_start > sanitized_end:
+        sanitized_start, sanitized_end = sanitized_end, sanitized_start
+
     ports: List[int] = []
     if port_spec is None:
-        for p in range(start_port, end_port + 1):
-            ports.append(p)
+        ports.extend(range(sanitized_start, sanitized_end + 1))
     else:
         for token in port_spec.split(","):
-            token = token.strip()
-            if not token:
-                continue
-            if "-" in token:
-                left, right = token.split("-", 1)
-                try:
-                    start = int(left)
-                    stop = int(right)
-                except ValueError:
-                    continue
-                if start > stop:
-                    start, stop = stop, start
-                for p in range(start, stop + 1):
-                    ports.append(p)
-            else:
-                try:
-                    ports.append(int(token))
-                except ValueError:
-                    continue
+            expanded = _expand_port_token(token, sanitized_start, sanitized_end)
+            if expanded:
+                ports.extend(expanded)
 
     valid_sorted_unique: List[int] = []
-    seen = set()
+    seen: Set[int] = set()
     for p in ports:
         if p < 1 or p > 65535:
             continue
