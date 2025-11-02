@@ -920,7 +920,12 @@ def _filter_open_results(result_rows: List[Dict[str, object]]) -> List[Dict[str,
     return open_rows
 
 
-def write_results_to_csv(csv_path: str, result_rows: List[Dict[str, object]]) -> None:
+def write_results_to_csv(
+    csv_path: str,
+    result_rows: List[Dict[str, object]],
+    *,
+    only_open: bool = False,
+) -> None:
     # [AUTO]Emit scanner results in a tabular CSV format.
 
     try:
@@ -928,7 +933,8 @@ def write_results_to_csv(csv_path: str, result_rows: List[Dict[str, object]]) ->
         with open(csv_path, mode="w", newline="") as fh:
             writer = csv.writer(fh)
             writer.writerow(["host", "port", "proto", "status", "note", "banner", "time_utc", "duration_ms"])
-            for rec in _filter_open_results(result_rows):
+            rows_to_write = _filter_open_results(result_rows) if only_open else result_rows
+            for rec in rows_to_write:
                 writer.writerow([
                     rec.get("host", ""),
                     rec.get("port", ""),
@@ -943,13 +949,19 @@ def write_results_to_csv(csv_path: str, result_rows: List[Dict[str, object]]) ->
     except Exception as exc:
         print(f"Failed to write CSV: {type(exc).__name__}")
 
-def write_results_to_json(json_path: str, result_rows: List[Dict[str, object]]) -> None:
+def write_results_to_json(
+    json_path: str,
+    result_rows: List[Dict[str, object]],
+    *,
+    only_open: bool = False,
+) -> None:
     # [AUTO]Persist scanner results as structured JSON.
 
     try:
         ensure_parent_directory_exists(json_path)
         with open(json_path, mode="w") as fh:
-            json.dump(_filter_open_results(result_rows), fh, indent=2)
+            rows_to_persist = _filter_open_results(result_rows) if only_open else result_rows
+            json.dump(rows_to_persist, fh, indent=2)
         print(f"json -> {json_path}")
     except Exception as exc:
         print(f"Failed to write JSON: {type(exc).__name__}")
@@ -1465,11 +1477,21 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
     else:
         rows_for_persistence = aggregate_open_results
 
+    artifacts_show_only_open = show_only_open_in_terminal
+
     if parsed_arguments.csv:
-        write_results_to_csv(parsed_arguments.csv, rows_for_persistence)
+        write_results_to_csv(
+            parsed_arguments.csv,
+            rows_for_persistence,
+            only_open=artifacts_show_only_open,
+        )
 
     if parsed_arguments.json:
-        write_results_to_json(parsed_arguments.json, rows_for_persistence)
+        write_results_to_json(
+            parsed_arguments.json,
+            rows_for_persistence,
+            only_open=artifacts_show_only_open,
+        )
 
     return aggregate_open_results, aggregate_all_scan_results
 
@@ -1774,16 +1796,31 @@ def run_batch_batter(targets_file: str,
         if artifacts_requested:
             persist_all_results = True
 
-    rows_for_persistence = aggregated_all_results if persist_all_results else aggregated_open_results
+    if show_only_open_in_terminal:
+        rows_for_persistence = aggregated_open_results
+    elif persist_all_results:
+        rows_for_persistence = aggregated_all_results
+    else:
+        rows_for_persistence = aggregated_open_results
 
     timestamp_for_auto_files = ts_utc_compact()
 
+    artifacts_show_only_open = show_only_open_in_terminal
+
     if base_arguments.csv:
         csv_filename = base_arguments.csv if base_arguments.csv != "AUTO" else f"test_csv_{timestamp_for_auto_files}.csv"
-        write_results_to_csv(csv_filename, rows_for_persistence)
+        write_results_to_csv(
+            csv_filename,
+            rows_for_persistence,
+            only_open=artifacts_show_only_open,
+        )
     if base_arguments.json:
         json_filename = base_arguments.json if base_arguments.json != "AUTO" else f"test_json_{timestamp_for_auto_files}.json"
-        write_results_to_json(json_filename, rows_for_persistence)
+        write_results_to_json(
+            json_filename,
+            rows_for_persistence,
+            only_open=artifacts_show_only_open,
+        )
 
     print(f"TEST end={utc_now_str()} open_found={len(aggregated_open_results)}")
 
