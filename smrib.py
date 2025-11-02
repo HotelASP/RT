@@ -188,6 +188,16 @@ def expand_targets_to_list(target_argument: str) -> List[str]:
 
     if os.path.isfile(target_argument):
         return read_targets_from_file(target_argument)
+
+    # Support comma/whitespace separated target lists supplied via CLI.
+    # Recurse per token so CIDR/file expansion still applies to individual entries.
+    tokens = [segment for segment in re.split(r"[\s,]+", target_argument) if segment]
+    if len(tokens) > 1:
+        expanded: List[str] = []
+        for token in tokens:
+            expanded.extend(expand_targets_to_list(token))
+        return expanded
+
     cidr_hosts = expand_cidr_to_hosts(target_argument)
     if cidr_hosts is not None:
         return cidr_hosts
@@ -1234,9 +1244,11 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
     top_ports_requested: Optional[int] = getattr(parsed_arguments, "top_ports", None)
     ports_selected_for_scan: List[int]
     if top_ports_requested is not None:
+        ignored_parts = ["--start/--end range"]
         if parsed_arguments.ports:
-            print("[info] --top-ports supplied; ignoring --ports specification.")
-        print("[info] Using top ports list; ignoring --start/--end range.")
+            ignored_parts.append("--ports specification")
+        ignored_text = " and ".join(ignored_parts)
+        print(f"[info] Using top ports list; ignoring {ignored_text}.")
         ports_selected_for_scan = load_top_ports_from_file(
             top_ports_requested,
             getattr(parsed_arguments, "top_ports_file", None),
