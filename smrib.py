@@ -19,23 +19,23 @@
 #    Outcome: emits DNS queries with exponential backoff, captures responses, and reports UDP reachability.
 #
 # 4. UDP NTP probing for time services validation.
-#    Command: sudo python3 smrib.py --targets 17.253.84.253 --ports 123 --udp --udp-probe ntp --timeout 4 --retries 2 --csv 'Logs/log_ntp_lookup.csv' --pcap 'Logs/log_ntp_lookup.pcap'
+#    Command: sudo python3 smrib.py --targets 17.253.84.253 --ports 123 --udp --udp-probe ntp --timeout 4 --retries 2 --csv 'logs/log_ntp_lookup.csv' --pcap 'logs/log_ntp_lookup.pcap'
 #    Outcome: verifies NTP listener availability, persisting responses into a CSV report.
 #
 # 5. Fast mode acceleration with shuffled ports and automatic adjustments.
-#    Command: python3 smrib.py --targets 10.0.5.5  --ports "22,80,443,100-200" --fast --show-closed-terminal --csv 'Logs/log_fast_10_0_5_5.csv'
+#    Command: sudo python3 smrib.py --targets 10.0.5.5  --ports "22,80,443,100-200" --fast --show-closed-terminal --csv 'logs/log_fast_10_0_5_5.csv'
 #    Outcome: enforces aggressive timeouts, disables banners, randomizes port order, and exports a JSON summary including closed ports.
 #
 # 6. Batch-driven multi-run execution from specification file.
-#    Command: python3 smrib.py --batch 'configs/batch_10_0_5_0.txt'
+#    Command: sudo python3 smrib.py --batch 'configs/batch_10_0_5_0.txt'
 #    Outcome: iterates through each valid CLI line inside runspec.txt, executing scans sequentially.
 #
 # 7. Compact diagnostic battery against a list of endpoints.
-#    Command: python3 smrib.py --batch-battery targets_hotelasp.txt --csv 'Logs/batch_battery_hotelasp.csv' --json 'Logs/batch_battery_hotelasp.json'
+#    Command: sudo python3 smrib.py --batch-battery targets_hotelasp.txt --csv 'Logs/batch_battery_hotelasp.csv' --json 'Logs/batch_battery_hotelasp.json'
 #    Outcome: conducts TCP connect, SYN, and UDP checks where permitted, consolidating the diagnostic results.
 #
 # 8. Web directory listing helper using HTTP wordlists.
-#    Command: python3 smrib.py --web-dir --url https://hotelasp.com --wordlist 'configs/webdir_wordlist.txt'
+#    Command: sudo python3 smrib.py --web-dir --url https://hotelasp.com --wordlist 'configs/webdir_wordlist.txt'
 #    Outcome: probes candidate paths from the wordlist and prints discovered HTTP status codes.
 
 from __future__ import annotations
