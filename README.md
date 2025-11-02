@@ -160,7 +160,8 @@ The bundled wordlist (`webdir_wordlist.txt`) and top ports file (`top-ports.txt`
 
 ## Tips
 
-- Use `--show-only-open` to focus terminal output on open services while still logging closed ports to disk.
+- Use `--show-only-open` to focus terminal output on open services. When CSV/JSON artifacts are requested the files still capture
+  closed and filtered results unless you also pass `--show-closed-terminal-only`.
 - Combine `--top-ports` with `--fast` for rapid reconnaissance on well-known services.
 - When writing to directories such as `Logs/`, ensure they exist beforehand: `mkdir -p Logs`.
 
