@@ -83,6 +83,9 @@ DEFAULTS: Dict[str, object] = {
     "RATE": int(os.environ.get("PORTSCAN_RATE", "0")),  # [AUTO]Zero disables rate limiting
 }
 
+SCRIPT_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
+DATA_DIRECTORY = os.path.join(SCRIPT_DIRECTORY, "data")
+
 TOP_PORTS_FILENAME = "top-ports.txt"
 DEFAULT_BATCH_BATTERY_TOP_PORTS = 200
 
@@ -276,16 +279,37 @@ def normalize_concurrency_for_mode(requested_concurrency: int, selected_mode: st
     return adjusted_value, None
 
 # [AUTO]Load the top ports list and return the requested number of entries.
+def resolve_data_path(preferred_filename: str) -> str:
+
+    if os.path.isabs(preferred_filename):
+        return preferred_filename
+    return os.path.join(DATA_DIRECTORY, preferred_filename)
+
+
+def first_existing_path(candidate_paths: List[str]) -> Optional[str]:
+
+    for candidate in candidate_paths:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def load_top_ports_from_file(max_ports: int, explicit_path: Optional[str] = None) -> List[int]:
 
     if max_ports <= 0:
         return []
 
+    resolved_path: Optional[str]
     if explicit_path:
-        resolved_path = explicit_path
+        candidate_paths: List[str] = []
+        if not os.path.isabs(explicit_path):
+            candidate_paths.append(resolve_data_path(explicit_path))
+        candidate_paths.append(explicit_path)
+        resolved_path = first_existing_path(candidate_paths)
+        if resolved_path is None:
+            resolved_path = candidate_paths[0]
     else:
-        script_directory = os.path.dirname(os.path.abspath(__file__))
-        resolved_path = os.path.join(script_directory, TOP_PORTS_FILENAME)
+        resolved_path = resolve_data_path(TOP_PORTS_FILENAME)
 
     ports: List[int] = []
     seen: Set[int] = set()
@@ -852,7 +876,15 @@ def run_web_directory_listing_tool(base_url: Optional[str],
     if not wordlist_path:
         print("Error: --wordlist/-w is required when using --web-dir.")
         return False
-    if not os.path.isfile(wordlist_path):
+
+    candidate_paths: List[str] = []
+    if wordlist_path:
+        if not os.path.isabs(wordlist_path):
+            candidate_paths.append(resolve_data_path(wordlist_path))
+        candidate_paths.append(wordlist_path)
+
+    resolved_wordlist = first_existing_path(candidate_paths)
+    if resolved_wordlist is None:
         print(f"Error: wordlist not found: {wordlist_path}")
         return False
 
@@ -872,7 +904,7 @@ def run_web_directory_listing_tool(base_url: Optional[str],
     base_for_join = normalized_base.rstrip("/") + "/"
 
     try:
-        with open(wordlist_path, "r", encoding="utf-8", errors="ignore") as handle:
+        with open(resolved_wordlist, "r", encoding="utf-8", errors="ignore") as handle:
             for raw_line in handle:
                 candidate = raw_line.strip()
                 if not candidate or candidate.startswith("#"):

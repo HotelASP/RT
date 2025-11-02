@@ -26,7 +26,7 @@ python3 smrib.py --help
 
 - `--targets` accepts an IP, hostname, CIDR, or filename containing one target per line.
 - `--start` / `--end` define a port range, while `--ports` accepts explicit comma-separated ports and ranges.
-- `--top-ports` pulls the most popular ports from `top-ports.txt` (or `--top-ports-file`).
+- `--top-ports` pulls the most popular ports from `data/top-ports.txt` (or `--top-ports-file`).
 - `--csv`, `--json`, and `--pcap` persist results; omit the argument to auto-generate timestamped names.
 - `--banner` enables banner grabbing on TCP connect scans.
 - `--syn` and `--udp` switch to Scapy-backed TCP SYN or UDP probing modes (root required).
@@ -101,6 +101,8 @@ python3 smrib.py --web-dir --url https://hotelasp.com --wordlist webdir_wordlist
 ```
 
 **What it does:** Iterates through the supplied wordlist, requesting each path relative to the URL and printing the observed HTTP status codes.
+
+The bundled wordlist (`webdir_wordlist.txt`) and top ports file (`top-ports.txt`) are stored in the `data/` directory. Providing just the filename automatically resolves to that location.
 
 ## Tips
 

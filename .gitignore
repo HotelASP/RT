@@ -9,4 +9,7 @@ venv/
 *.csv
 .idea/
 .vscode/
+configs/
+git-update-local.sh
+git-update-remote.sh
 
