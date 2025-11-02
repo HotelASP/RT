@@ -1,4 +1,3 @@
-hotelasp.com
-hotelalcaide.no-ip.biz
-hotelalcaide5g.ddns.net
-hotelalcaide2.ddns.net
+10.0.5.2
+10.0.5.5
+10.0.5.9
