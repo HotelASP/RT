@@ -1456,7 +1456,11 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
         if artifacts_requested:
             persist_all_results = True
 
-    if persist_all_results:
+    if show_only_open_in_terminal:
+        # Respect --show-only-open for artifact generation regardless of other
+        # flags that normally force full persistence (e.g. --json/--csv).
+        rows_for_persistence = aggregate_open_results
+    elif persist_all_results:
         rows_for_persistence = aggregate_all_scan_results
     else:
         rows_for_persistence = aggregate_open_results
