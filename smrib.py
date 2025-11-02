@@ -1234,15 +1234,42 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
 
     print("*** SMRIB PORT SCANNER ***")
     print("")
+    scan_started_at = utc_now_str()
+    rate_display = "unlimited" if parsed_arguments.rate <= 0 else f"{parsed_arguments.rate}/s"
     print(
-        f"SCAN start={utc_now_str()} "
+        f"SCAN start={scan_started_at} "
         f"mode={scan_mode_selected} "
         f"targets={len(target_labels_provided_by_user)} "
         f"ports={len(ports_selected_for_scan)} "
         f"concurrency={parsed_arguments.concurrency} "
         f"timeout={parsed_arguments.timeout}s "
-        f"rate={parsed_arguments.rate}/s"
+        f"rate={rate_display}"
     )
+
+    def describe_bool(flag_value: bool) -> str:
+        return "on" if flag_value else "off"
+
+    parameter_overview_parts = [
+        "PARAMS",
+        f"start_port={parsed_arguments.start}",
+        f"end_port={parsed_arguments.end}",
+        f"ports_arg={parsed_arguments.ports if parsed_arguments.ports else 'none'}",
+        f"top_ports={top_ports_requested if top_ports_requested is not None else 'none'}",
+        f"total_ports={len(ports_selected_for_scan)}",
+        f"udp_probe={parsed_arguments.udp_probe if scan_mode_selected == 'udp' else 'n/a'}",
+        f"retries={parsed_arguments.retries}",
+        f"retry_backoff={parsed_arguments.retry_backoff}s",
+        f"shuffle={describe_bool(parsed_arguments.shuffle)}",
+        f"banner={describe_bool(parsed_arguments.banner)}",
+        f"fast_mode={describe_bool(parsed_arguments.fast)}",
+        f"show_closed_terminal={describe_bool(getattr(parsed_arguments, 'show_closed_terminal', False))}",
+        f"show_closed_terminal_only={describe_bool(getattr(parsed_arguments, 'show_closed_terminal_only', False))}",
+        f"show_only_open={describe_bool(getattr(parsed_arguments, 'show_only_open', False))}",
+        f"csv={parsed_arguments.csv if parsed_arguments.csv else 'none'}",
+        f"json={parsed_arguments.json if parsed_arguments.json else 'none'}",
+        f"pcap={parsed_arguments.pcap if parsed_arguments.pcap else 'none'}",
+    ]
+    print(" ".join(parameter_overview_parts))
     if concurrency_notice:
         print(concurrency_notice)
     if fast_mode_adjustments is not None:
