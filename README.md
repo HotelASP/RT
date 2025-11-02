@@ -80,6 +80,21 @@ These entry points are heavily commented in the source file to assist new users 
 
 For quick experiments, you can export environment variables once (for example, `export PORTSCAN_HOST=scanme.nmap.org`) and then run `python3 smrib.py` repeatedly without retyping the host.
 
+## Understanding the output artifacts
+
+Every scan result is normalised into a consistent structure before being written to disk. Both the CSV and JSON writers emit records with the following fields:
+
+- **host** – textual host label or IP address that was scanned.
+- **port** – destination port number.
+- **proto** – transport protocol (`tcp` or `udp`).
+- **status** – classification such as `open`, `closed`, or `filtered`.
+- **note** – short diagnostic string (for example an error code or banner text).
+- **banner** – banner data captured from TCP connect scans when `--banner` is enabled.
+- **time_utc** – timestamp indicating when the result was recorded.
+- **duration_ms** – elapsed time in milliseconds for the individual probe.
+
+Internally these values are modelled by the `ScanRecord` data class in `smrib.py`, keeping the CSV and JSON writers in sync. When `--show-only-open` is active, the same filtering logic is applied before persisting artifacts so the files only contain open services.
+
 ## End-to-end examples
 
 The commands in this section are ready to copy, paste, and run. Adjust file paths and target values to match your environment. Examples that require root are explicitly labeled.

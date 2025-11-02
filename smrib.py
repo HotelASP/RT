@@ -44,6 +44,7 @@ import argparse
 import asyncio
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass
 import csv
 import ipaddress
 import json
@@ -100,6 +101,30 @@ SCAPY_CONCURRENCY_LIMIT: int = max(1, int(os.environ.get("PORTSCAN_SCAPY_MAX_CON
 FD_LIMIT_SAFETY_MARGIN: int = 32
 
 FAST_MODE_MIN_CONCURRENCY: int = 1024
+
+
+@dataclass
+class ScanRecord:
+    """Represents a single scan observation for CSV/JSON reporting."""
+
+    host: str
+    port: int
+    proto: str
+    status: str
+    note: str
+    banner: str
+    time: str
+    duration_ms: int
+
+    def is_open(self) -> bool:
+        """Return ``True`` when the record indicates an open service."""
+
+        return self.status.lower() == "open"
+
+    def to_dict(self) -> Dict[str, object]:
+        """Return a JSON/CSV friendly dictionary representation."""
+
+        return asdict(self)
 
 
 class StoreValueAndMarkExplicit(argparse.Action):
@@ -733,7 +758,8 @@ async def scan_all_selected_ports_for_host(target_ip: str,
                                            per_host_ops_per_sec: int,
                                            udp_probe_kind: str,
                                            retries: int,
-                                           backoff_seconds: float) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
+                                           backoff_seconds: float) -> Tuple[List[ScanRecord], List[ScanRecord]]:
+    """Scan *target_ip* across *selected_ports* and return (open_only, all_results)."""
 
     effective_concurrency = max(1, max_concurrency)
     scapy_executor: Optional[ThreadPoolExecutor] = None
@@ -745,8 +771,8 @@ async def scan_all_selected_ports_for_host(target_ip: str,
     semaphore = asyncio.Semaphore(effective_concurrency)
     limiter = FixedRateLimiter(per_host_ops_per_sec)
 
-    confirmed_open_results: List[Dict[str, object]] = []
-    all_results_for_host: List[Dict[str, object]] = []
+    confirmed_open_results: List[ScanRecord] = []
+    all_results_for_host: List[ScanRecord] = []
 
     async def run_one_port_probe(port_number: int) -> Tuple[str, int, str, str, str, int]:
         await limiter.wait()
@@ -803,19 +829,19 @@ async def scan_all_selected_ports_for_host(target_ip: str,
             ):
                 banner_text = note
 
-            record: Dict[str, object] = {
-                "host": host,
-                "port": port,
-                "proto": proto,
-                "status": status,
-                "note": note,
-                "banner": banner_text,
-                "time": timestamp,
-                "duration_ms": duration_ms,
-            }
+            record = ScanRecord(
+                host=host,
+                port=port,
+                proto=proto,
+                status=status,
+                note=note,
+                banner=banner_text,
+                time=timestamp,
+                duration_ms=duration_ms,
+            )
             all_results_for_host.append(record)
 
-            if status == "open":
+            if record.is_open():
                 confirmed_open_results.append(record)
     finally:
         if scapy_executor is not None:
@@ -827,17 +853,15 @@ async def scan_all_selected_ports_for_host(target_ip: str,
 def emit_summary_for_suppressed_results(host_label: str,
                                         ip_address: str,
                                         show_only_open_flag: bool,
-                                        open_results: List[Dict[str, object]],
-                                        all_results: List[Dict[str, object]]) -> None:
+                                        open_results: List[ScanRecord],
+                                        all_results: List[ScanRecord]) -> None:
+    """Print a hint when open results are hidden yet other responses were observed."""
     if not show_only_open_flag:
         return
     if open_results or not all_results:
         return
 
-    status_note_pairs = [
-        (record.get("status", ""), record.get("note", ""))
-        for record in all_results
-    ]
+    status_note_pairs = [(record.status, record.note) for record in all_results]
     if not status_note_pairs:
         return
 
@@ -909,41 +933,36 @@ def stop_sniffer_and_write_pcap(sniffer: Any, pcap_filename: str) -> None:
         print(f"Failed to write pcap {pcap_filename}: {type(exc).__name__}")
 
 
-def _filter_open_results(result_rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
-    """Return only records whose status marks the port as open."""
+def filter_open_records(result_rows: List[ScanRecord]) -> List[ScanRecord]:
+    """Return only entries that indicate an open service."""
 
-    open_rows: List[Dict[str, object]] = []
-    for record in result_rows:
-        status = record.get("status")
-        if isinstance(status, str) and status.lower() == "open":
-            open_rows.append(record)
-    return open_rows
+    return [record for record in result_rows if record.is_open()]
 
 
 def write_results_to_csv(
     csv_path: str,
-    result_rows: List[Dict[str, object]],
+    result_rows: List[ScanRecord],
     *,
     only_open: bool = False,
 ) -> None:
-    # [AUTO]Emit scanner results in a tabular CSV format.
+    """Emit scanner results in a tabular CSV format."""
 
     try:
         ensure_parent_directory_exists(csv_path)
         with open(csv_path, mode="w", newline="") as fh:
             writer = csv.writer(fh)
             writer.writerow(["host", "port", "proto", "status", "note", "banner", "time_utc", "duration_ms"])
-            rows_to_write = _filter_open_results(result_rows) if only_open else result_rows
+            rows_to_write = filter_open_records(result_rows) if only_open else result_rows
             for rec in rows_to_write:
                 writer.writerow([
-                    rec.get("host", ""),
-                    rec.get("port", ""),
-                    rec.get("proto", ""),
-                    rec.get("status", ""),
-                    rec.get("note", ""),
-                    rec.get("banner", ""),
-                    rec.get("time", ""),
-                    rec.get("duration_ms", ""),
+                    rec.host,
+                    rec.port,
+                    rec.proto,
+                    rec.status,
+                    rec.note,
+                    rec.banner,
+                    rec.time,
+                    rec.duration_ms,
                 ])
         print(f"csv -> {csv_path}")
     except Exception as exc:
@@ -951,17 +970,17 @@ def write_results_to_csv(
 
 def write_results_to_json(
     json_path: str,
-    result_rows: List[Dict[str, object]],
+    result_rows: List[ScanRecord],
     *,
     only_open: bool = False,
 ) -> None:
-    # [AUTO]Persist scanner results as structured JSON.
+    """Persist scanner results as structured JSON."""
 
     try:
         ensure_parent_directory_exists(json_path)
         with open(json_path, mode="w") as fh:
-            rows_to_persist = _filter_open_results(result_rows) if only_open else result_rows
-            json.dump(rows_to_persist, fh, indent=2)
+            rows_to_persist = filter_open_records(result_rows) if only_open else result_rows
+            json.dump([record.to_dict() for record in rows_to_persist], fh, indent=2)
         print(f"json -> {json_path}")
     except Exception as exc:
         print(f"Failed to write JSON: {type(exc).__name__}")
@@ -1257,7 +1276,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
     return parser
 
 # [AUTO]Execute the complete scanning workflow for supplied arguments.
-def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
+def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[ScanRecord], List[ScanRecord]]:
 
     fast_mode_adjustments = apply_fast_mode_overrides(parsed_arguments)
     show_closed_in_terminal = bool(
@@ -1383,8 +1402,8 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
         print("[fast] Private and internal networks are included automatically.")
     print("")
 
-    aggregate_open_results: List[Dict[str, object]] = []
-    aggregate_all_scan_results: List[Dict[str, object]] = []
+    aggregate_open_results: List[ScanRecord] = []
+    aggregate_all_scan_results: List[ScanRecord] = []
     has_scanned_at_least_one_target = False
 
     try:
@@ -1461,7 +1480,7 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
     print("")
     print(f"SCAN end={utc_now_str()} open_found={len(aggregate_open_results)}")
 
-    rows_for_persistence: List[Dict[str, object]]
+    rows_for_persistence: List[ScanRecord]
     persist_all_results = bool(parsed_arguments.show_closed_terminal)
     if not persist_all_results and not getattr(parsed_arguments, "show_closed_terminal_only", False):
         artifacts_requested = bool(parsed_arguments.csv) or bool(parsed_arguments.json)
@@ -1660,8 +1679,8 @@ def run_batch_batter(targets_file: str,
     test_ports_syn = selected_ports_for_battery
     test_ports_udp = selected_ports_for_battery
 
-    aggregated_open_results: List[Dict[str, object]] = []
-    aggregated_all_results: List[Dict[str, object]] = []
+    aggregated_open_results: List[ScanRecord] = []
+    aggregated_all_results: List[ScanRecord] = []
     any_scan_completed = False
 
     event_loop = asyncio.new_event_loop()
@@ -1796,6 +1815,7 @@ def run_batch_batter(targets_file: str,
         if artifacts_requested:
             persist_all_results = True
 
+    rows_for_persistence: List[ScanRecord]
     if show_only_open_in_terminal:
         rows_for_persistence = aggregated_open_results
     elif persist_all_results:
