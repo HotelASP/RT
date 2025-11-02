@@ -7,7 +7,7 @@
 #
 # 1. Targeted TCP connect sweep with banner capture and explicit artifact names.
 #    *** PCAP needs root ***
-#    Command: sudo python3 smrib.py --targets targets_hotelasp.txt --ports "21,22,80,443" --banner --csv 'Logs/log_hotelasp.csv' --json 'Logs/log_hotelasp.json' --pcap 'Logs/log_hotelasp.pcap'
+#    Command: sudo python3 smrib.py --targets 'configs/targets_hotelasp.txt' --ports "21,22,80,443" --banner --csv 'logs/log_hotelasp.csv' --json 'logs/log_hotelasp.json' --pcap 'logs/log_hotelasp.pcap'
 #    Outcome: establishes full TCP sessions, captures available TLS banners, and stores results in the requested CSV/JSON/PCAP files.
 #
 # 2. High-concurrency TCP SYN reconnaissance respecting rate guards.
