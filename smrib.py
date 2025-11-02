@@ -1110,7 +1110,9 @@ def build_cli_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--show-closed-terminal",
         action="store_true",
-        help="Also print CLOSED results and persist ALL results to CSV/JSON."
+        help=(
+            "Also print CLOSED results in the terminal. Output artifacts already include CLOSED entries when generated."
+        ),
     )
 
     parser.add_argument(
@@ -1437,7 +1439,13 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[Dict[str, 
     print(f"SCAN end={utc_now_str()} open_found={len(aggregate_open_results)}")
 
     rows_for_persistence: List[Dict[str, object]]
-    if parsed_arguments.show_closed_terminal:
+    persist_all_results = bool(parsed_arguments.show_closed_terminal)
+    if not persist_all_results and not getattr(parsed_arguments, "show_closed_terminal_only", False):
+        artifacts_requested = bool(parsed_arguments.csv) or bool(parsed_arguments.json)
+        if artifacts_requested:
+            persist_all_results = True
+
+    if persist_all_results:
         rows_for_persistence = aggregate_all_scan_results
     else:
         rows_for_persistence = aggregate_open_results
@@ -1745,9 +1753,13 @@ def run_batch_batter(targets_file: str,
 
     event_loop.close()
 
-    rows_for_persistence = (
-        aggregated_all_results if base_arguments.show_closed_terminal else aggregated_open_results
-    )
+    persist_all_results = bool(base_arguments.show_closed_terminal)
+    if not persist_all_results and not getattr(base_arguments, "show_closed_terminal_only", False):
+        artifacts_requested = bool(base_arguments.csv) or bool(base_arguments.json)
+        if artifacts_requested:
+            persist_all_results = True
+
+    rows_for_persistence = aggregated_all_results if persist_all_results else aggregated_open_results
 
     timestamp_for_auto_files = ts_utc_compact()
 
