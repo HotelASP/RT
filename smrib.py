@@ -293,8 +293,22 @@ def apply_fast_mode_overrides(parsed_arguments: argparse.Namespace) -> Optional[
     fast_mode_adjustments["includes_private_targets"] = True
 
     auto_syn_enabled = False
-    if getattr(parsed_arguments, "syn", False):
-        auto_syn_enabled = True
+    if not getattr(parsed_arguments, "syn", False) and not getattr(parsed_arguments, "udp", False):
+        # Attempt to promote fast mode to SYN scanning when prerequisites hold.
+        auto_syn_reason = ""
+        if SCAPY_AVAILABLE:
+            try:
+                if os.geteuid() == 0:
+                    parsed_arguments.syn = True
+                    auto_syn_enabled = True
+                else:
+                    auto_syn_reason = "root-required"
+            except AttributeError:
+                auto_syn_reason = "privilege-unknown"
+        else:
+            auto_syn_reason = "scapy-missing"
+        if auto_syn_reason:
+            fast_mode_adjustments["auto_syn_reason"] = auto_syn_reason
 
     fast_mode_adjustments["auto_syn"] = auto_syn_enabled
     fast_mode_adjustments["mode"] = "syn" if getattr(parsed_arguments, "syn", False) else (
@@ -939,6 +953,32 @@ def filter_open_records(result_rows: List[ScanRecord]) -> List[ScanRecord]:
     return [record for record in result_rows if record.is_open()]
 
 
+def should_persist_all_results(show_closed_terminal: bool,
+                               show_closed_terminal_only: bool,
+                               csv_path: Optional[str],
+                               json_path: Optional[str]) -> bool:
+    # Decide if artifact writers should include closed ports in their output.
+
+    if show_closed_terminal:
+        return True
+    if show_closed_terminal_only:
+        return False
+    return bool(csv_path) or bool(json_path)
+
+
+def determine_artifact_rows(show_only_open: bool,
+                            persist_all: bool,
+                            open_rows: List[ScanRecord],
+                            all_rows: List[ScanRecord]) -> Tuple[List[ScanRecord], bool]:
+    # Choose which scan records to persist and whether to filter for open entries.
+
+    if show_only_open:
+        return open_rows, True
+    if persist_all:
+        return all_rows, False
+    return open_rows, False
+
+
 def write_results_to_csv(
     csv_path: str,
     result_rows: List[ScanRecord],
@@ -1248,7 +1288,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--batch-battery",
         metavar="TARGETS_OR_COUNT",
-        dest="batch_batter",
+        dest="batch_battery",
         help=(
             "Run a compact test battery. Provide a targets file or an integer COUNT to "
             "use the --targets argument with the top ports list."
@@ -1399,6 +1439,13 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[ScanRecord
         guardrail_notice = fast_mode_adjustments.get("concurrency_guardrail_notice")
         if guardrail_notice:
             print(f"[fast] {guardrail_notice}")
+        auto_syn_reason = fast_mode_adjustments.get("auto_syn_reason")
+        if auto_syn_reason == "scapy-missing":
+            print("[fast] Scapy not available, unable to auto-select SYN mode.")
+        elif auto_syn_reason == "root-required":
+            print("[fast] Run as root to allow fast mode to auto-select SYN scanning.")
+        elif auto_syn_reason == "privilege-unknown":
+            print("[fast] Could not verify privileges; leaving SYN auto-selection disabled.")
         print("[fast] Private and internal networks are included automatically.")
     print("")
 
@@ -1480,23 +1527,19 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[ScanRecord
     print("")
     print(f"SCAN end={utc_now_str()} open_found={len(aggregate_open_results)}")
 
-    rows_for_persistence: List[ScanRecord]
-    persist_all_results = bool(parsed_arguments.show_closed_terminal)
-    if not persist_all_results and not getattr(parsed_arguments, "show_closed_terminal_only", False):
-        artifacts_requested = bool(parsed_arguments.csv) or bool(parsed_arguments.json)
-        if artifacts_requested:
-            persist_all_results = True
+    persist_all_results = should_persist_all_results(
+        bool(parsed_arguments.show_closed_terminal),
+        bool(getattr(parsed_arguments, "show_closed_terminal_only", False)),
+        parsed_arguments.csv,
+        parsed_arguments.json,
+    )
 
-    if show_only_open_in_terminal:
-        # Respect --show-only-open for artifact generation regardless of other
-        # flags that normally force full persistence (e.g. --json/--csv).
-        rows_for_persistence = aggregate_open_results
-    elif persist_all_results:
-        rows_for_persistence = aggregate_all_scan_results
-    else:
-        rows_for_persistence = aggregate_open_results
-
-    artifacts_show_only_open = show_only_open_in_terminal
+    rows_for_persistence, artifacts_show_only_open = determine_artifact_rows(
+        show_only_open_in_terminal,
+        persist_all_results,
+        aggregate_open_results,
+        aggregate_all_scan_results,
+    )
 
     if parsed_arguments.csv:
         write_results_to_csv(
@@ -1619,8 +1662,8 @@ def determine_batch_battery_ports(
 
 
 # [AUTO]Execute a compact verification suite against provided targets.
-def run_batch_batter(targets_file: str,
-                     base_arguments: argparse.Namespace) -> None:
+def run_batch_battery(targets_file: str,
+                      base_arguments: argparse.Namespace) -> None:
 
     top_ports_override_from_batch: Optional[int] = None
     normalized_path = os.path.expanduser(str(targets_file))
@@ -1665,14 +1708,22 @@ def run_batch_batter(targets_file: str,
     show_only_open_in_terminal = bool(getattr(base_arguments, "show_only_open", False))
     if fast_mode_adjustments is not None:
         rate_description = "off" if base_arguments.rate <= 0 else f"{base_arguments.rate}/s"
+        auto_syn_note = " (auto-selected SYN)" if fast_mode_adjustments.get("auto_syn") else ""
         print(
-            f"[fast] Test battery mode: concurrency={base_arguments.concurrency} "
+            f"[fast]{auto_syn_note} Test battery mode: concurrency={base_arguments.concurrency} "
             f"timeout={base_arguments.timeout}s rate-limit={rate_description} "
             f"shuffle={'on' if base_arguments.shuffle else 'off'} banner={'on' if base_arguments.banner else 'off'}"
         )
         guardrail_notice = fast_mode_adjustments.get("concurrency_guardrail_notice")
         if guardrail_notice:
             print(f"[fast] {guardrail_notice}")
+        auto_syn_reason = fast_mode_adjustments.get("auto_syn_reason")
+        if auto_syn_reason == "scapy-missing":
+            print("[fast] Scapy not available, unable to auto-select SYN mode for tests.")
+        elif auto_syn_reason == "root-required":
+            print("[fast] Run the batch battery as root to allow SYN auto-selection.")
+        elif auto_syn_reason == "privilege-unknown":
+            print("[fast] Could not verify privileges; skipping SYN auto-selection in tests.")
         print("[fast] Private and internal networks are included automatically during the battery.")
 
     test_ports_connect = selected_ports_for_battery
@@ -1809,23 +1860,21 @@ def run_batch_batter(targets_file: str,
 
     event_loop.close()
 
-    persist_all_results = bool(base_arguments.show_closed_terminal)
-    if not persist_all_results and not getattr(base_arguments, "show_closed_terminal_only", False):
-        artifacts_requested = bool(base_arguments.csv) or bool(base_arguments.json)
-        if artifacts_requested:
-            persist_all_results = True
+    persist_all_results = should_persist_all_results(
+        bool(base_arguments.show_closed_terminal),
+        bool(getattr(base_arguments, "show_closed_terminal_only", False)),
+        base_arguments.csv,
+        base_arguments.json,
+    )
 
-    rows_for_persistence: List[ScanRecord]
-    if show_only_open_in_terminal:
-        rows_for_persistence = aggregated_open_results
-    elif persist_all_results:
-        rows_for_persistence = aggregated_all_results
-    else:
-        rows_for_persistence = aggregated_open_results
+    rows_for_persistence, artifacts_show_only_open = determine_artifact_rows(
+        show_only_open_in_terminal,
+        persist_all_results,
+        aggregated_open_results,
+        aggregated_all_results,
+    )
 
     timestamp_for_auto_files = ts_utc_compact()
-
-    artifacts_show_only_open = show_only_open_in_terminal
 
     if base_arguments.csv:
         csv_filename = base_arguments.csv if base_arguments.csv != "AUTO" else f"test_csv_{timestamp_for_auto_files}.csv"
@@ -1876,8 +1925,8 @@ def main() -> None:
         run_batch_from_file(args.batch)
         return
 
-    if args.batch_batter:
-        run_batch_batter(args.batch_batter, args)
+    if args.batch_battery:
+        run_batch_battery(args.batch_battery, args)
         return
 
     run_full_scan(args)

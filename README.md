@@ -54,7 +54,7 @@ All other CLI switches fall back to sane defaults (`False` for boolean toggles, 
 
 ### What `--fast` mode changes
 
-Fast mode increases concurrency (subject to file descriptor guardrails), caps timeouts to 0.3 seconds, disables banner collection and retries, prefers SYN scanning when allowed, shuffles port order, and scans private/internal targets as-is. The terminal output will confirm the effective settings whenever `--fast` is used.
+Fast mode increases concurrency (subject to file descriptor guardrails), caps timeouts to 0.3 seconds, disables banner collection and retries, prefers SYN scanning when allowed, shuffles port order, and scans private/internal targets as-is. When Scapy is installed and the scanner runs with root privileges, fast mode now auto-switches to SYN probing and prints a helpful notice when that promotion is not possible. The terminal output will confirm the effective settings whenever `--fast` is used.
 
 ## How the code is organised
 
