@@ -133,10 +133,17 @@ class ScanRecord:
 
 @dataclass
 class InterfaceNetwork:
-    """Description of a local network interface with an IPv4 assignment."""
+    """Description of an IPv4 network reachable through a local interface."""
 
     name: str
-    ipv4: ipaddress.IPv4Interface
+    network: ipaddress.IPv4Network
+    local_ip: ipaddress.IPv4Address
+    source: str = "interface"
+
+    def contains_local_ip(self) -> bool:
+        """Return True when the local IP belongs to the associated network."""
+
+        return self.local_ip in self.network
 
 
 @dataclass
@@ -277,25 +284,27 @@ def is_external_ip(ip_text: str) -> bool:
 
 def gather_local_ipv4_interfaces() -> List[InterfaceNetwork]:
 
-    def add_interface(result: Dict[Tuple[str, str, str], InterfaceNetwork], name: str,
+    def add_interface(result: Dict[Tuple[str, str], InterfaceNetwork], name: str,
                       address: str, netmask: str) -> None:
         if not address or not netmask:
             return
         try:
-            ipv4_interface = ipaddress.IPv4Interface(f"{address}/{netmask}")
+            ipv4_address = ipaddress.IPv4Address(address)
+            network = ipaddress.IPv4Network(f"{address}/{netmask}", strict=False)
         except Exception:
             return
-        ip_text = str(ipv4_interface.ip)
+        ip_text = str(ipv4_address)
         if is_external_ip(ip_text):
             return
-        if ipv4_interface.ip.is_loopback:
+        if ipv4_address.is_loopback:
             return
-        key = (name, ip_text, ipv4_interface.network.with_prefixlen)
+        key = (name, network.with_prefixlen)
         if key in result:
             return
-        result[key] = InterfaceNetwork(name=name, ipv4=ipv4_interface)
+        result[key] = InterfaceNetwork(name=name, network=network, local_ip=ipv4_address)
 
-    collected: Dict[Tuple[str, str, str], InterfaceNetwork] = {}
+    collected: Dict[Tuple[str, str], InterfaceNetwork] = {}
+    interface_local_ip: Dict[str, ipaddress.IPv4Address] = {}
 
     try:
         import psutil  # type: ignore
@@ -310,7 +319,13 @@ def gather_local_ipv4_interfaces() -> List[InterfaceNetwork]:
                         continue
                     ip_value = getattr(address, "address", "") or ""
                     netmask_value = getattr(address, "netmask", "") or ""
+                    before = len(collected)
                     add_interface(collected, interface_name, ip_value, netmask_value)
+                    if len(collected) != before:
+                        try:
+                            interface_local_ip[interface_name] = ipaddress.IPv4Address(ip_value)
+                        except Exception:
+                            pass
         except Exception:
             pass
 
@@ -334,7 +349,10 @@ def gather_local_ipv4_interfaces() -> List[InterfaceNetwork]:
                     ipv4_interface = ipaddress.IPv4Interface(address_cidr)
                 except Exception:
                     continue
+                before = len(collected)
                 add_interface(collected, name, str(ipv4_interface.ip), str(ipv4_interface.network.netmask))
+                if len(collected) != before:
+                    interface_local_ip.setdefault(name, ipv4_interface.ip)
         except (FileNotFoundError, subprocess.CalledProcessError):
             pass
 
@@ -363,9 +381,109 @@ def gather_local_ipv4_interfaces() -> List[InterfaceNetwork]:
                         netmask = socket.inet_ntoa(int_mask.to_bytes(4, byteorder="big"))
                     except Exception:
                         netmask = ""
+                before = len(collected)
                 add_interface(collected, current_interface, address, netmask)
+                if len(collected) != before:
+                    try:
+                        interface_local_ip[current_interface] = ipaddress.IPv4Address(address)
+                    except Exception:
+                        pass
 
-    return sorted(collected.values(), key=lambda item: (item.name, int(item.ipv4.network.network_address)))
+    routed: Dict[Tuple[str, str], InterfaceNetwork] = {}
+
+    def add_routed_network(interface_name: str, network: ipaddress.IPv4Network,
+                           local_ip: Optional[ipaddress.IPv4Address]) -> None:
+        if local_ip is None:
+            return
+        key = (interface_name, network.with_prefixlen)
+        if key in collected or key in routed:
+            return
+        representative = str(network.network_address)
+        if is_external_ip(representative):
+            return
+        routed[key] = InterfaceNetwork(
+            name=interface_name,
+            network=network,
+            local_ip=local_ip,
+            source="route",
+        )
+
+    try:
+        output = subprocess.run(
+            ["ip", "-f", "inet", "route", "show"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        for line in output.stdout.splitlines():
+            parts = line.split()
+            if not parts:
+                continue
+            destination = parts[0]
+            if destination in {"default", "broadcast", "unreachable", "prohibit", "throw"}:
+                continue
+            if destination.count("/") == 0:
+                destination = f"{destination}/32"
+            try:
+                network = ipaddress.IPv4Network(destination, strict=False)
+            except Exception:
+                continue
+            dev_index = None
+            src_index = None
+            for index, token in enumerate(parts):
+                if token == "dev" and index + 1 < len(parts):
+                    dev_index = index + 1
+                if token == "src" and index + 1 < len(parts):
+                    src_index = index + 1
+            if dev_index is None:
+                continue
+            interface_name = parts[dev_index]
+            local_ip = None
+            if src_index is not None:
+                try:
+                    local_ip = ipaddress.IPv4Address(parts[src_index])
+                except Exception:
+                    local_ip = None
+            if local_ip is None:
+                local_ip = interface_local_ip.get(interface_name)
+            add_routed_network(interface_name, network, local_ip)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pass
+
+    if not routed:
+        try:
+            output = subprocess.run(
+                ["route", "-n"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            output = None
+        if output is not None:
+            for line in output.stdout.splitlines():
+                tokens = line.split()
+                if len(tokens) < 8 or tokens[0].lower() == "destination":
+                    continue
+                destination, gateway, netmask, _, _, _, _, interface_name = tokens[:8]
+                if destination == "0.0.0.0":
+                    continue
+                try:
+                    network = ipaddress.IPv4Network(f"{destination}/{netmask}", strict=False)
+                except Exception:
+                    continue
+                add_routed_network(interface_name, network, interface_local_ip.get(interface_name))
+
+    combined = list(collected.values()) + list(routed.values())
+    return sorted(
+        combined,
+        key=lambda item: (
+            item.name,
+            int(item.network.network_address),
+            item.network.prefixlen,
+            int(item.local_ip),
+        ),
+    )
 
 
 def determine_ping_command() -> Optional[List[str]]:
@@ -411,11 +529,11 @@ async def discover_hosts_on_interface(interface: InterfaceNetwork,
                                        ping_timeout: float = 1.5) -> None:
 
     semaphore = asyncio.Semaphore(max(1, max_concurrency))
-    local_ip = interface.ipv4.ip
+    local_ip = interface.local_ip if interface.contains_local_ip() else None
     tasks: List[asyncio.Task] = []
 
     async def probe(address: ipaddress.IPv4Address) -> None:
-        if address == local_ip:
+        if local_ip is not None and address == local_ip:
             return
         ip_text = str(address)
         try:
@@ -426,7 +544,7 @@ async def discover_hosts_on_interface(interface: InterfaceNetwork,
         if alive:
             await on_host_found(ip_text)
 
-    for candidate in interface.ipv4.network.hosts():
+    for candidate in interface.network.hosts():
         tasks.append(asyncio.create_task(probe(candidate)))
 
     if not tasks:
@@ -1208,14 +1326,22 @@ async def perform_find_machines_discovery(interfaces: List[InterfaceNetwork],
     seen_hosts: Set[str] = set()
 
     for interface in interfaces:
-        network = interface.ipv4.network
+        network = interface.network
         if network.prefixlen >= 31:
             potential_hosts = network.num_addresses
         else:
             potential_hosts = max(0, network.num_addresses - 2)
 
+        if interface.contains_local_ip():
+            binding = f"{interface.local_ip}/{network.prefixlen}"
+        else:
+            binding = f"{interface.local_ip}"
+        if interface.source == "route":
+            origin = " (routed)"
+        else:
+            origin = ""
         print(
-            f"[find] Interface {interface.name} -> {interface.ipv4.ip}/{network.prefixlen} "
+            f"[find] Interface {interface.name}{origin} -> {binding} "
             f"network {network.network_address}/{network.prefixlen} ({potential_hosts} host candidates)"
         )
 
@@ -1262,9 +1388,15 @@ def persist_discovered_targets(results: List[Tuple[InterfaceNetwork, List[str]]]
     try:
         with open(target_path, "w", encoding="utf-8") as handle:
             for interface, hosts in results:
-                network = interface.ipv4.network
+                network = interface.network
+                if interface.contains_local_ip():
+                    binding = f"{interface.local_ip}/{network.prefixlen}"
+                else:
+                    binding = str(interface.local_ip)
+                if interface.source == "route":
+                    binding = f"{binding} (routed)"
                 handle.write(
-                    f"# interface {interface.name} address {interface.ipv4.ip}/{network.prefixlen} "
+                    f"# interface {interface.name} address {binding} "
                     f"network {network.network_address}/{network.prefixlen}\n"
                 )
                 for host in hosts:
