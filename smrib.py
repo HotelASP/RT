@@ -1212,7 +1212,7 @@ async def scan_all_selected_ports_for_host(target_ip: str,
 
 
 async def run_port_scan_for_host(target_ip: str,
-                                 configuration: PortScanConfiguration) -> None:
+                                 configuration: PortScanConfiguration) -> Tuple[List[ScanRecord], List[ScanRecord]]:
 
     try:
         open_results, all_results = await scan_all_selected_ports_for_host(
@@ -1231,7 +1231,7 @@ async def run_port_scan_for_host(target_ip: str,
         )
     except Exception as exc:
         print(f"[find] Error scanning {target_ip}: {exc}")
-        return
+        return [], []
 
     emit_summary_for_suppressed_results(
         host_label=target_ip,
@@ -1240,6 +1240,8 @@ async def run_port_scan_for_host(target_ip: str,
         open_results=open_results,
         all_results=all_results,
     )
+
+    return open_results, all_results
 
 # Provide a hint when --show-only-open hides every result for a host.
 def emit_summary_for_suppressed_results(host_label: str,
@@ -1338,9 +1340,11 @@ def prepare_port_scan_configuration(parsed_arguments: argparse.Namespace) -> Opt
 
 async def perform_find_machines_discovery(interfaces: List[InterfaceNetwork],
                                           ping_command: List[str],
-                                          port_configuration: Optional[PortScanConfiguration]) -> List[Tuple[InterfaceNetwork, List[str]]]:
+                                          port_configuration: Optional[PortScanConfiguration]) -> Tuple[List[Tuple[InterfaceNetwork, List[str]]], List[ScanRecord], List[ScanRecord]]:
 
     aggregated: List[Tuple[InterfaceNetwork, List[str]]] = []
+    aggregated_open_results: List[ScanRecord] = []
+    aggregated_all_results: List[ScanRecord] = []
     seen_hosts: Set[str] = set()
 
     for interface in interfaces:
@@ -1378,7 +1382,13 @@ async def perform_find_machines_discovery(interfaces: List[InterfaceNetwork],
             hosts_for_interface.append(ip_text)
             print(f"[find] {interface.name} responsive host: {ip_text}")
             if port_configuration is not None:
-                scan_tasks.append(asyncio.create_task(run_port_scan_for_host(ip_text, port_configuration)))
+
+                async def scan_and_collect(target_ip: str) -> None:
+                    open_results, all_results = await run_port_scan_for_host(target_ip, port_configuration)
+                    aggregated_open_results.extend(open_results)
+                    aggregated_all_results.extend(all_results)
+
+                scan_tasks.append(asyncio.create_task(scan_and_collect(ip_text)))
 
         await discover_hosts_on_interface(
             interface,
@@ -1397,7 +1407,7 @@ async def perform_find_machines_discovery(interfaces: List[InterfaceNetwork],
         else:
             print(f"[find] {interface.name}: no responsive hosts detected.\n")
 
-    return aggregated
+    return aggregated, aggregated_open_results, aggregated_all_results
 
 
 def persist_discovered_targets(results: List[Tuple[InterfaceNetwork, List[str]]]) -> Optional[str]:
@@ -1442,10 +1452,15 @@ def run_find_machines_mode(parsed_arguments: argparse.Namespace) -> None:
 
     if getattr(parsed_arguments, "pcap", None):
         print("[find] Warning: --pcap is not supported alongside --find-machines and will be ignored.")
-    if getattr(parsed_arguments, "csv", None):
-        print("[find] Warning: --csv output is not generated during --find-machines discovery.")
-    if getattr(parsed_arguments, "json", None):
-        print("[find] Warning: --json output is not generated during --find-machines discovery.")
+
+    auto_show_only_open = False
+    if (
+        not getattr(parsed_arguments, "show_only_open", False)
+        and not getattr(parsed_arguments, "show_closed_terminal", False)
+        and not getattr(parsed_arguments, "show_closed_terminal_only", False)
+    ):
+        parsed_arguments.show_only_open = True
+        auto_show_only_open = True
 
     port_configuration: Optional[PortScanConfiguration] = None
     if ports_requested_explicitly(parsed_arguments):
@@ -1466,11 +1481,18 @@ def run_find_machines_mode(parsed_arguments: argparse.Namespace) -> None:
         port_configuration = prepare_port_scan_configuration(parsed_arguments)
     else:
         print("[find] Port scanning disabled (no explicit port options supplied).")
+        if getattr(parsed_arguments, "csv", None):
+            print("[find] Warning: CSV output requires configured ports; no file will be generated.")
+        if getattr(parsed_arguments, "json", None):
+            print("[find] Warning: JSON output requires configured ports; no file will be generated.")
 
     event_loop = asyncio.new_event_loop()
+    results: List[Tuple[InterfaceNetwork, List[str]]] = []
+    aggregated_open_results: List[ScanRecord] = []
+    aggregated_all_results: List[ScanRecord] = []
     try:
         asyncio.set_event_loop(event_loop)
-        results = event_loop.run_until_complete(
+        results, aggregated_open_results, aggregated_all_results = event_loop.run_until_complete(
             perform_find_machines_discovery(
                 interfaces,
                 ping_command,
@@ -1490,6 +1512,53 @@ def run_find_machines_mode(parsed_arguments: argparse.Namespace) -> None:
     persisted_path = persist_discovered_targets(results)
     if persisted_path:
         print(f"[find] Saved discovered targets to {persisted_path}.")
+
+    if port_configuration is None:
+        return
+
+    timestamp_for_auto_files = ts_utc_compact()
+    show_only_open_in_terminal = bool(getattr(parsed_arguments, "show_only_open", False))
+
+    persist_all_results = should_persist_all_results(
+        bool(parsed_arguments.show_closed_terminal),
+        bool(getattr(parsed_arguments, "show_closed_terminal_only", False)),
+        parsed_arguments.csv,
+        parsed_arguments.json,
+    )
+
+    rows_for_persistence, artifacts_show_only_open = determine_artifact_rows(
+        show_only_open_in_terminal,
+        persist_all_results,
+        aggregated_open_results,
+        aggregated_all_results,
+    )
+
+    csv_destination: Optional[str] = parsed_arguments.csv
+    if csv_destination == "AUTO":
+        csv_destination = default_log_artifact_path(
+            f"find_csv_{timestamp_for_auto_files}.csv"
+        )
+    if csv_destination:
+        write_results_to_csv(
+            csv_destination,
+            rows_for_persistence,
+            only_open=artifacts_show_only_open,
+        )
+
+    json_destination: Optional[str] = parsed_arguments.json
+    if json_destination == "AUTO":
+        json_destination = default_log_artifact_path(
+            f"find_json_{timestamp_for_auto_files}.json"
+        )
+    if json_destination:
+        write_results_to_json(
+            json_destination,
+            rows_for_persistence,
+            only_open=artifacts_show_only_open,
+        )
+
+    if auto_show_only_open and not aggregated_open_results and aggregated_all_results:
+        print("[find] Tip: --show-only-open was enabled automatically; rerun with --show-closed-terminal to review all results.")
 
 
 # [AUTO]Abort early when Scapy-driven modes cannot operate.
