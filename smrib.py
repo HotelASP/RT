@@ -12,7 +12,7 @@
 #
 # 2. High-concurrency TCP SYN reconnaissance respecting rate guards.
 #    Command: sudo python3 smrib.py --targets 10.0.5.2 --start 1 --end 1024 --syn --rate 15 --concurrency 200 --csv 'logs/log_syn_10_0_5_2.csv'
-#    Outcome: performs Scapy-powered SYN scans, throttled to fifteen operations per second, while collecting structured JSON output.
+#    Outcome: performs Scapy-powered SYN scans, throttled to fifteen operations per second, while collecting a structured CSV report.
 #
 # 3. UDP DNS inspection with adaptive retries and packet capture.
 #    Command: sudo python3 smrib.py --targets 1.1.1.1 --ports 53 --udp --udp-probe dns --timeout 1.5 --retries 3 --retry-backoff 0.25 --csv 'logs/log_dns_lookup.csv' --pcap 'logs/log_dns_lookup.pcap'
@@ -24,11 +24,11 @@
 #
 # 5. Fast mode acceleration with shuffled ports and automatic adjustments.
 #    Command: sudo python3 smrib.py --targets 10.0.5.5  --ports "22,80,443,100-200" --fast --show-closed-terminal --csv 'logs/log_fast.csv'
-#    Outcome: enforces aggressive timeouts, disables banners, randomizes port order, and exports a JSON summary including closed ports.
+#    Outcome: enforces aggressive timeouts, disables banners, randomizes port order, and prints closed ports while exporting a CSV summary.
 #
 # 6. Batch-driven multi-run execution from specification file.
 #    Command: sudo python3 smrib.py --batch batch.txt
-#    Outcome: iterates through each valid CLI line inside runspec.txt, executing scans sequentially.
+#    Outcome: iterates through each valid CLI line inside batch.txt, executing scans sequentially.
 #
 # 7. Compact diagnostic battery against a list of endpoints.
 #    Command: sudo python3 smrib.py --batch-battery targets.txt --csv 'logs/batch_battery.csv' --json 'logs/batch_battery.json'
