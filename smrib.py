@@ -168,6 +168,7 @@ class PingObservation:
     packets_transmitted: Optional[int] = None
     packets_received: Optional[int] = None
     raw_output: str = ""
+    anomaly_detected: bool = False
 
 
 @dataclass
@@ -715,14 +716,6 @@ async def run_ping_probe(
     if "100% packet loss" in output_text_lower:
         return PingObservation(success=False, raw_output=raw_output)
 
-    anomaly_markers = (
-        "wrong data byte",
-        "invalid tv_usec",
-        "time of day goes back",
-    )
-    if any(marker in output_text_lower for marker in anomaly_markers):
-        return PingObservation(success=False, raw_output=raw_output)
-
     success_markers = (
         "ttl=",
         "time=",
@@ -730,8 +723,16 @@ async def run_ping_probe(
         "reply from",
         "bytes from",
     )
-    if not any(marker in output_text_lower for marker in success_markers):
+    has_success_marker = any(marker in output_text_lower for marker in success_markers)
+    if not has_success_marker:
         return PingObservation(success=False, raw_output=raw_output)
+
+    anomaly_markers = (
+        "wrong data byte",
+        "invalid tv_usec",
+        "time of day goes back",
+    )
+    anomaly_detected = any(marker in output_text_lower for marker in anomaly_markers)
 
     latency_ms = _parse_latency_from_ping(output_text_lower)
     ttl = _parse_ttl_from_ping(output_text_lower)
@@ -754,6 +755,7 @@ async def run_ping_probe(
         packets_transmitted=transmitted,
         packets_received=received,
         raw_output=raw_output,
+        anomaly_detected=anomaly_detected,
     )
 
 
@@ -774,6 +776,8 @@ def format_ping_observation(observation: PingObservation) -> str:
         details.append(
             f"tx/rx={observation.packets_transmitted}/{observation.packets_received}"
         )
+    if observation.anomaly_detected:
+        details.append("warnings")
     if not details:
         details.append("success")
     return " (ping " + ", ".join(details) + ")"
