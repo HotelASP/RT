@@ -98,6 +98,8 @@ SCRIPT_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 DATA_DIRECTORY = os.path.join(SCRIPT_DIRECTORY, "data")
 LOGS_DIRECTORY = os.path.join(SCRIPT_DIRECTORY, "logs")
 
+DEFAULT_FIND_TARGETS_FILENAME = "targets_internal.txt"
+
 
 def default_log_artifact_path(filename: str) -> str:
     """Return an absolute path inside the logs directory for auto artifacts."""
@@ -289,6 +291,26 @@ def is_external_ip(ip_text: str) -> bool:
     if getattr(ip_obj, "is_reserved", False):
         return False
     return True
+
+
+def interpret_boolean_choice(value: str) -> bool:
+
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "t", "yes", "y"}:
+        return True
+    if normalized in {"0", "false", "f", "no", "n"}:
+        return False
+    raise ValueError(value)
+
+
+def argparse_boolean_choice(value: str) -> bool:
+
+    try:
+        return interpret_boolean_choice(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"Invalid choice '{value}'. Expected yes/no or true/false."
+        ) from exc
 
 
 def gather_local_ipv4_interfaces(include_external: bool = False) -> List[InterfaceNetwork]:
@@ -572,8 +594,7 @@ async def discover_hosts_on_interface(interface: InterfaceNetwork,
     await asyncio.gather(*tasks, return_exceptions=False)
 
 
-def load_additional_find_networks(file_path: str,
-                                  include_external: bool) -> List[InterfaceNetwork]:
+def load_additional_find_networks(file_path: str) -> Tuple[List[InterfaceNetwork], Optional[bool]]:
 
     normalized = os.path.expanduser(str(file_path))
     candidate_paths = [normalized]
@@ -588,10 +609,11 @@ def load_additional_find_networks(file_path: str,
 
     if resolved_path is None:
         print(f"[find] Additional targets file not found: {file_path}")
-        return []
+        return [], None
 
     networks: List[InterfaceNetwork] = []
     seen: Set[str] = set()
+    include_external_setting: Optional[bool] = None
     try:
         with open(resolved_path, "r", encoding="utf-8") as handle:
             for line_number, raw_line in enumerate(handle, 1):
@@ -601,6 +623,17 @@ def load_additional_find_networks(file_path: str,
                 candidate = stripped.split("#", 1)[0].strip()
                 if not candidate:
                     continue
+                if "=" in candidate:
+                    key, value = [segment.strip() for segment in candidate.split("=", 1)]
+                    if key.lower() == "include_external":
+                        try:
+                            include_external_setting = interpret_boolean_choice(value)
+                        except ValueError:
+                            print(
+                                f"[find] Invalid include_external value '{value}' on line {line_number} "
+                                f"of {resolved_path}. Expected yes/no or true/false."
+                            )
+                        continue
                 try:
                     network = ipaddress.IPv4Network(candidate, strict=False)
                 except ValueError:
@@ -610,11 +643,6 @@ def load_additional_find_networks(file_path: str,
                     )
                     continue
                 representative = str(network.network_address)
-                if not include_external and is_external_ip(representative):
-                    print(
-                        f"[find] Skipping non-internal network {network.with_prefixlen} from {resolved_path}."
-                    )
-                    continue
                 key = network.with_prefixlen
                 if key in seen:
                     continue
@@ -629,7 +657,7 @@ def load_additional_find_networks(file_path: str,
                 )
     except OSError as exc:
         print(f"[find] Unable to read additional targets file {resolved_path}: {exc}")
-        return []
+        return [], include_external_setting
 
     if networks:
         print(
@@ -637,7 +665,7 @@ def load_additional_find_networks(file_path: str,
         )
     else:
         print(f"[find] No additional networks found in {resolved_path}.")
-    return networks
+    return networks, include_external_setting
 
 # [AUTO]Tune parameters aggressively when --fast is active.
 def apply_fast_mode_overrides(parsed_arguments: argparse.Namespace) -> Optional[Dict[str, object]]:
@@ -1511,21 +1539,62 @@ def persist_discovered_targets(results: List[Tuple[InterfaceNetwork, List[str]]]
 # [AUTO]Discover responsive hosts across internal interfaces and optionally scan them.
 def run_find_machines_mode(parsed_arguments: argparse.Namespace) -> None:
 
-    include_external = bool(getattr(parsed_arguments, "find_include_external", False))
+    include_external_cli = getattr(parsed_arguments, "find_include_external", None)
+
+    additional_targets_path = getattr(
+        parsed_arguments,
+        "find_machines_from_targets_file",
+        None,
+    )
+
+    additional_interfaces: List[InterfaceNetwork] = []
+    include_external_from_targets: Optional[bool] = None
+    if additional_targets_path:
+        additional_interfaces, include_external_from_targets = load_additional_find_networks(
+            additional_targets_path
+        )
+    else:
+        additional_interfaces, include_external_from_targets = load_additional_find_networks(
+            DEFAULT_FIND_TARGETS_FILENAME
+        )
+
+    include_external_setting = (
+        include_external_cli
+        if include_external_cli is not None
+        else include_external_from_targets
+    )
+    include_external = True if include_external_setting is None else bool(include_external_setting)
+
+    if include_external_cli is None and include_external_from_targets is not None:
+        state = "enabled" if include_external else "disabled"
+        print(
+            f"[find] Additional targets file requests include_external be {state}."
+        )
+
     interfaces = gather_local_ipv4_interfaces(include_external=include_external)
 
-    additional_targets_path = getattr(parsed_arguments, "find_machines_targets", None)
-    if additional_targets_path:
-        additional_interfaces = load_additional_find_networks(
-            additional_targets_path,
-            include_external,
-        )
-        if additional_interfaces:
+    if additional_interfaces:
+        filtered_additional: List[InterfaceNetwork] = []
+        skipped_external = 0
+        for candidate in additional_interfaces:
+            representative = str(candidate.network.network_address)
+            if not include_external and is_external_ip(representative):
+                skipped_external += 1
+                continue
+            filtered_additional.append(candidate)
+        if skipped_external:
+            print(
+                "[find] Skipping "
+                f"{skipped_external} non-internal network(s) from additional targets because "
+                "external discovery is disabled."
+            )
+
+        if filtered_additional:
             existing_networks: Set[str] = {
                 interface.network.with_prefixlen for interface in interfaces
             }
             duplicates = 0
-            for candidate in additional_interfaces:
+            for candidate in filtered_additional:
                 key = candidate.network.with_prefixlen
                 if key in existing_networks:
                     duplicates += 1
@@ -2090,18 +2159,22 @@ def build_cli_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--find-include-external",
-        action="store_true",
+        metavar="{yes,no}",
+        dest="find_include_external",
+        type=argparse_boolean_choice,
+        default=None,
         help=(
-            "Allow --find-machines to include non-private IPv4 networks discovered from interfaces or routes."
+            "Allow --find-machines to include non-private IPv4 networks discovered from interfaces or routes. "
+            "Accepts yes/no or true/false."
         )
     )
     parser.add_argument(
-        "--find-machines-targets",
+        "--find-machines-from-targets-file",
         metavar="FILE",
-        dest="find_machines_targets",
+        dest="find_machines_from_targets_file",
         help=(
-            "Optional file containing additional internal CIDR ranges to explore during --find-machines. "
-            "Lines starting with # are ignored."
+            "Optional file containing additional CIDR ranges to explore during --find-machines. "
+            f"Defaults to {DEFAULT_FIND_TARGETS_FILENAME!r} when omitted. Lines starting with # are ignored."
         ),
     )
 
