@@ -100,6 +100,7 @@ DATA_DIRECTORY = os.path.join(SCRIPT_DIRECTORY, "data")
 LOGS_DIRECTORY = os.path.join(SCRIPT_DIRECTORY, "logs")
 
 DEFAULT_FIND_TARGETS_FILENAME = "targets_internal.txt"
+DEFAULT_FIND_TARGETS_PING_FILENAME = "targets.txt"
 
 
 def default_log_artifact_path(filename: str) -> str:
@@ -721,6 +722,7 @@ def load_additional_find_networks(
     file_path: str,
     *,
     quiet_missing: bool = False,
+    source_label: str = "file",
 ) -> Tuple[List[InterfaceNetwork], Optional[bool]]:
 
     resolved_path = _resolve_targets_file_path(file_path)
@@ -736,10 +738,10 @@ def load_additional_find_networks(
 
     networks: List[InterfaceNetwork] = [
         InterfaceNetwork(
-            name=f"file:{os.path.basename(resolved_path)}:{line_number}",
+            name=f"{source_label}:{os.path.basename(resolved_path)}:{line_number}",
             network=network,
             local_ip=network.network_address,
-            source="file",
+            source=source_label,
         )
         for network, line_number in parsed_networks
     ]
@@ -1522,7 +1524,8 @@ def prepare_port_scan_configuration(parsed_arguments: argparse.Namespace) -> Opt
 
 async def perform_find_machines_discovery(interfaces: List[InterfaceNetwork],
                                           ping_command: List[str],
-                                          port_configuration: Optional[PortScanConfiguration]) -> Tuple[List[Tuple[InterfaceNetwork, List[str]]], List[ScanRecord], List[ScanRecord]]:
+                                          port_configuration: Optional[PortScanConfiguration],
+                                          ping_timeout: float) -> Tuple[List[Tuple[InterfaceNetwork, List[str]]], List[ScanRecord], List[ScanRecord]]:
 
     aggregated: List[Tuple[InterfaceNetwork, List[str]]] = []
     aggregated_open_results: List[ScanRecord] = []
@@ -1590,6 +1593,7 @@ async def perform_find_machines_discovery(interfaces: List[InterfaceNetwork],
             interface,
             ping_command,
             handle_host,
+            ping_timeout=ping_timeout,
         )
 
         if scan_tasks:
@@ -1646,9 +1650,35 @@ def run_find_machines_mode(parsed_arguments: argparse.Namespace) -> None:
     additional_targets_explicit = bool(
         getattr(parsed_arguments, "find_machines_from_targets_file_explicit", False)
     )
+    ping_targets_path = getattr(
+        parsed_arguments,
+        "find_machines_from_targets_file_and_ping",
+        None,
+    )
+    ping_targets_explicit = bool(
+        getattr(parsed_arguments, "find_machines_from_targets_file_and_ping_explicit", False)
+    )
 
     additional_interfaces: List[InterfaceNetwork] = []
-    include_external_from_targets: Optional[bool] = None
+    ping_file_interfaces: List[InterfaceNetwork] = []
+    include_external_request: Optional[bool] = None
+    include_external_request_source: Optional[str] = None
+
+    def register_include_external(request: Optional[bool], source_label: str) -> None:
+        nonlocal include_external_request, include_external_request_source
+        if request is None:
+            return
+        if include_external_request is None:
+            include_external_request = request
+            include_external_request_source = source_label
+            return
+        if include_external_request != request:
+            desired_state = "enabled" if request else "disabled"
+            original_state = "enabled" if include_external_request else "disabled"
+            print(
+                f"[find] Ignoring include_external request from {source_label} ({desired_state}) "
+                f"because {include_external_request_source} already requested it be {original_state}."
+            )
 
     targets_file_to_use = additional_targets_path
     quiet_missing_targets_file = False
@@ -1662,31 +1692,71 @@ def run_find_machines_mode(parsed_arguments: argparse.Namespace) -> None:
         targets_file_to_use = DEFAULT_FIND_TARGETS_FILENAME
         quiet_missing_targets_file = True
 
+    include_external_from_targets: Optional[bool] = None
     if targets_file_to_use:
         additional_interfaces, include_external_from_targets = load_additional_find_networks(
             targets_file_to_use,
             quiet_missing=quiet_missing_targets_file,
+            source_label="file",
+        )
+        register_include_external(
+            include_external_from_targets,
+            f"targets file {targets_file_to_use}",
         )
 
-    include_external_setting = (
-        include_external_cli
-        if include_external_cli is not None
-        else include_external_from_targets
-    )
+    ping_targets_to_use = ping_targets_path
+    quiet_missing_ping_targets = False
+    if ping_targets_explicit:
+        if not ping_targets_to_use:
+            ping_targets_to_use = DEFAULT_FIND_TARGETS_PING_FILENAME
+        if ping_targets_to_use == DEFAULT_FIND_TARGETS_PING_FILENAME:
+            quiet_missing_ping_targets = True
+
+    include_external_from_ping: Optional[bool] = None
+    if ping_targets_to_use:
+        ping_file_interfaces, include_external_from_ping = load_additional_find_networks(
+            ping_targets_to_use,
+            quiet_missing=quiet_missing_ping_targets,
+            source_label="file-ping",
+        )
+        register_include_external(
+            include_external_from_ping,
+            f"ping targets file {ping_targets_to_use}",
+        )
+
+    include_external_setting: Optional[bool]
+    if include_external_cli is not None:
+        include_external_setting = include_external_cli
+    else:
+        include_external_setting = include_external_request
+
     include_external = True if include_external_setting is None else bool(include_external_setting)
 
-    if include_external_cli is None and include_external_from_targets is not None:
+    if include_external_cli is None and include_external_request is not None:
         state = "enabled" if include_external else "disabled"
         print(
-            f"[find] Additional targets file requests include_external be {state}."
+            f"[find] {include_external_request_source} requests include_external be {state}."
         )
 
     interfaces = gather_local_ipv4_interfaces(include_external=include_external)
 
-    if additional_interfaces:
+    existing_networks: Set[str] = {
+        interface.network.with_prefixlen for interface in interfaces
+    }
+
+    def merge_interfaces(new_interfaces: List[InterfaceNetwork]) -> None:
+        nonlocal existing_networks
+        if not new_interfaces:
+            return
+        origin_label = new_interfaces[0].source
+        origin_description = {
+            "file": "additional targets",
+            "file-ping": "ping targets",
+        }.get(origin_label, origin_label or "additional targets")
+
         filtered_additional: List[InterfaceNetwork] = []
         skipped_external = 0
-        for candidate in additional_interfaces:
+        for candidate in new_interfaces:
             representative = str(candidate.network.network_address)
             if not include_external and is_external_ip(representative):
                 skipped_external += 1
@@ -1694,27 +1764,41 @@ def run_find_machines_mode(parsed_arguments: argparse.Namespace) -> None:
             filtered_additional.append(candidate)
         if skipped_external:
             print(
-                "[find] Skipping "
-                f"{skipped_external} non-internal network(s) from additional targets because "
-                "external discovery is disabled."
+                f"[find] Skipping {skipped_external} non-internal network(s) from {origin_description} "
+                "because external discovery is disabled."
             )
 
-        if filtered_additional:
-            existing_networks: Set[str] = {
-                interface.network.with_prefixlen for interface in interfaces
-            }
-            duplicates = 0
-            for candidate in filtered_additional:
-                key = candidate.network.with_prefixlen
-                if key in existing_networks:
-                    duplicates += 1
-                    continue
-                interfaces.append(candidate)
-                existing_networks.add(key)
-            if duplicates:
-                print(
-                    f"[find] Skipped {duplicates} duplicate network(s) already covered by interface discovery."
-                )
+        if not filtered_additional:
+            return
+
+        duplicates = 0
+        for candidate in filtered_additional:
+            key = candidate.network.with_prefixlen
+            if key in existing_networks:
+                duplicates += 1
+                continue
+            interfaces.append(candidate)
+            existing_networks.add(key)
+        if duplicates:
+            print(
+                f"[find] Skipped {duplicates} duplicate network(s) already covered by interface discovery "
+                f"from {origin_description}."
+            )
+
+    merge_interfaces(additional_interfaces)
+    merge_interfaces(ping_file_interfaces)
+
+    ping_timeout_value = getattr(parsed_arguments, "find_machines_ping_timeout", 0.3)
+    try:
+        ping_timeout = float(ping_timeout_value)
+    except (TypeError, ValueError):
+        print(
+            f"[find] Invalid ping timeout {ping_timeout_value!r}; defaulting to 0.3 seconds."
+        )
+        ping_timeout = 0.3
+    if ping_timeout <= 0:
+        print("[find] Ping timeout must be positive; defaulting to 0.3 seconds.")
+        ping_timeout = 0.3
 
     if not interfaces:
         print("[find] No internal IPv4 interfaces or additional networks detected.")
@@ -1772,6 +1856,7 @@ def run_find_machines_mode(parsed_arguments: argparse.Namespace) -> None:
                 interfaces,
                 ping_command,
                 port_configuration,
+                ping_timeout,
             )
         )
     finally:
@@ -2290,6 +2375,27 @@ def build_cli_parser() -> argparse.ArgumentParser:
             "Optional file containing additional CIDR ranges to explore during --find-machines. "
             f"Defaults to {DEFAULT_FIND_TARGETS_FILENAME!r} when omitted. Lines starting with # are ignored."
         ),
+    )
+    parser.add_argument(
+        "--find-machines-from-targets-file-and-ping",
+        metavar="FILE",
+        dest="find_machines_from_targets_file_and_ping",
+        nargs="?",
+        action=StoreValueAndMarkExplicit,
+        const=DEFAULT_FIND_TARGETS_PING_FILENAME,
+        default=None,
+        help=(
+            "Optional file containing targets that should be validated with a ping probe during --find-machines. "
+            f"Defaults to {DEFAULT_FIND_TARGETS_PING_FILENAME!r} when omitted."
+        ),
+    )
+    parser.add_argument(
+        "--find-machines-ping-timeout",
+        metavar="SECONDS",
+        dest="find_machines_ping_timeout",
+        type=float,
+        default=0.3,
+        help="Timeout in seconds for each ping probe performed during --find-machines discovery. Defaults to 0.3 seconds.",
     )
 
     return parser
