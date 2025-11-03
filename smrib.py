@@ -538,7 +538,8 @@ async def discover_hosts_on_interface(interface: InterfaceNetwork,
                                        ping_timeout: float = 1.5) -> None:
 
     semaphore = asyncio.Semaphore(max(1, max_concurrency))
-    local_ip = interface.local_ip if interface.contains_local_ip() else None
+    skip_local_ip = interface.source != "file" and interface.contains_local_ip()
+    local_ip = interface.local_ip if skip_local_ip else None
     tasks: List[asyncio.Task] = []
 
     async def probe(address: ipaddress.IPv4Address) -> None:
@@ -569,6 +570,74 @@ async def discover_hosts_on_interface(interface: InterfaceNetwork,
         return
 
     await asyncio.gather(*tasks, return_exceptions=False)
+
+
+def load_additional_find_networks(file_path: str,
+                                  include_external: bool) -> List[InterfaceNetwork]:
+
+    normalized = os.path.expanduser(str(file_path))
+    candidate_paths = [normalized]
+    if not os.path.isabs(normalized):
+        candidate_paths.append(os.path.join(SCRIPT_DIRECTORY, normalized))
+
+    resolved_path = None
+    for candidate in candidate_paths:
+        if os.path.isfile(candidate):
+            resolved_path = candidate
+            break
+
+    if resolved_path is None:
+        print(f"[find] Additional targets file not found: {file_path}")
+        return []
+
+    networks: List[InterfaceNetwork] = []
+    seen: Set[str] = set()
+    try:
+        with open(resolved_path, "r", encoding="utf-8") as handle:
+            for line_number, raw_line in enumerate(handle, 1):
+                stripped = raw_line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                candidate = stripped.split("#", 1)[0].strip()
+                if not candidate:
+                    continue
+                try:
+                    network = ipaddress.IPv4Network(candidate, strict=False)
+                except ValueError:
+                    print(
+                        f"[find] Skipping invalid network '{candidate}' on line {line_number} "
+                        f"of {resolved_path}."
+                    )
+                    continue
+                representative = str(network.network_address)
+                if not include_external and is_external_ip(representative):
+                    print(
+                        f"[find] Skipping non-internal network {network.with_prefixlen} from {resolved_path}."
+                    )
+                    continue
+                key = network.with_prefixlen
+                if key in seen:
+                    continue
+                seen.add(key)
+                networks.append(
+                    InterfaceNetwork(
+                        name=f"file:{os.path.basename(resolved_path)}:{line_number}",
+                        network=network,
+                        local_ip=network.network_address,
+                        source="file",
+                    )
+                )
+    except OSError as exc:
+        print(f"[find] Unable to read additional targets file {resolved_path}: {exc}")
+        return []
+
+    if networks:
+        print(
+            f"[find] Loaded {len(networks)} additional network(s) from {resolved_path}."
+        )
+    else:
+        print(f"[find] No additional networks found in {resolved_path}.")
+    return networks
 
 # [AUTO]Tune parameters aggressively when --fast is active.
 def apply_fast_mode_overrides(parsed_arguments: argparse.Namespace) -> Optional[Dict[str, object]]:
@@ -1360,6 +1429,8 @@ async def perform_find_machines_discovery(interfaces: List[InterfaceNetwork],
             binding = f"{interface.local_ip}"
         if interface.source == "route":
             origin = " (routed)"
+        elif interface.source == "file":
+            origin = " (file)"
         else:
             origin = ""
         print(
@@ -1440,11 +1511,34 @@ def persist_discovered_targets(results: List[Tuple[InterfaceNetwork, List[str]]]
 # [AUTO]Discover responsive hosts across internal interfaces and optionally scan them.
 def run_find_machines_mode(parsed_arguments: argparse.Namespace) -> None:
 
-    interfaces = gather_local_ipv4_interfaces(
-        include_external=bool(getattr(parsed_arguments, "find_include_external", False))
-    )
+    include_external = bool(getattr(parsed_arguments, "find_include_external", False))
+    interfaces = gather_local_ipv4_interfaces(include_external=include_external)
+
+    additional_targets_path = getattr(parsed_arguments, "find_machines_targets", None)
+    if additional_targets_path:
+        additional_interfaces = load_additional_find_networks(
+            additional_targets_path,
+            include_external,
+        )
+        if additional_interfaces:
+            existing_networks: Set[str] = {
+                interface.network.with_prefixlen for interface in interfaces
+            }
+            duplicates = 0
+            for candidate in additional_interfaces:
+                key = candidate.network.with_prefixlen
+                if key in existing_networks:
+                    duplicates += 1
+                    continue
+                interfaces.append(candidate)
+                existing_networks.add(key)
+            if duplicates:
+                print(
+                    f"[find] Skipped {duplicates} duplicate network(s) already covered by interface discovery."
+                )
+
     if not interfaces:
-        print("[find] No internal IPv4 interfaces detected.")
+        print("[find] No internal IPv4 interfaces or additional networks detected.")
         return
 
     ping_command = determine_ping_command()
@@ -2000,6 +2094,15 @@ def build_cli_parser() -> argparse.ArgumentParser:
         help=(
             "Allow --find-machines to include non-private IPv4 networks discovered from interfaces or routes."
         )
+    )
+    parser.add_argument(
+        "--find-machines-targets",
+        metavar="FILE",
+        dest="find_machines_targets",
+        help=(
+            "Optional file containing additional internal CIDR ranges to explore during --find-machines. "
+            "Lines starting with # are ignored."
+        ),
     )
 
     return parser
