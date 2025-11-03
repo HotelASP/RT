@@ -102,7 +102,7 @@ The commands in this section are ready to copy, paste, and run. Adjust file path
 ### 1. TCP connect sweep with banner capture *(root only when using --pcap)*
 
 ```bash
-sudo python3 smrib.py --targets targets_hotelasp.txt --ports "21,22,80,443" --banner --csv Logs/log_hotelasp.csv --json Logs/log_hotelasp.json --pcap Logs/log_hotelasp.pcap
+sudo python3 smrib.py --targets targets_hotelasp.txt --ports "21,22,80,443" --banner --csv logs/log_hotelasp.csv --json logs/log_hotelasp.json --pcap logs/log_hotelasp.pcap
 ```
 
 **What it does:** Establishes full TCP sessions against the listed targets, retrieves available banners, and stores results in CSV, JSON, and PCAP artifacts.
@@ -110,7 +110,7 @@ sudo python3 smrib.py --targets targets_hotelasp.txt --ports "21,22,80,443" --ba
 ### 2. High-concurrency TCP SYN reconnaissance *(root required)*
 
 ```bash
-sudo python3 smrib.py --targets 10.0.5.2 --start 1 --end 1024 --syn --rate 15 --concurrency 200 --csv Logs/log_syn_10_0_5_2.csv
+sudo python3 smrib.py --targets 10.0.5.2 --start 1 --end 1024 --syn --rate 15 --concurrency 200 --csv logs/log_syn_10_0_5_2.csv
 ```
 
 **What it does:** Launches a Scapy-powered SYN scan across the first 1,024 ports with rate limiting, capturing the findings in CSV format.
@@ -118,7 +118,7 @@ sudo python3 smrib.py --targets 10.0.5.2 --start 1 --end 1024 --syn --rate 15 --
 ### 3. UDP DNS inspection with adaptive retries *(root required for --pcap)*
 
 ```bash
-sudo python3 smrib.py --targets 1.1.1.1 --ports 53 --udp --udp-probe dns --timeout 1.5 --retries 3 --retry-backoff 0.25 --csv Logs/log_dns_lookup.csv --pcap Logs/log_dns_lookup.pcap
+sudo python3 smrib.py --targets 1.1.1.1 --ports 53 --udp --udp-probe dns --timeout 1.5 --retries 3 --retry-backoff 0.25 --csv logs/log_dns_lookup.csv --pcap logs/log_dns_lookup.pcap
 ```
 
 **What it does:** Sends DNS queries with exponential backoff, records UDP responsiveness, and saves packet captures for review.
@@ -126,7 +126,7 @@ sudo python3 smrib.py --targets 1.1.1.1 --ports 53 --udp --udp-probe dns --timeo
 ### 4. UDP NTP probing *(root required for --pcap)*
 
 ```bash
-sudo python3 smrib.py --targets 17.253.84.253 --ports 123 --udp --udp-probe ntp --timeout 4 --retries 2 --csv Logs/log_ntp_lookup.csv --pcap Logs/log_ntp_lookup.pcap
+sudo python3 smrib.py --targets 17.253.84.253 --ports 123 --udp --udp-probe ntp --timeout 4 --retries 2 --csv logs/log_ntp_lookup.csv --pcap logs/log_ntp_lookup.pcap
 ```
 
 **What it does:** Checks for NTP services, logging outcomes and optionally capturing packet traces for verification.
@@ -134,12 +134,12 @@ sudo python3 smrib.py --targets 17.253.84.253 --ports 123 --udp --udp-probe ntp 
 ### 5. Fast mode scan with shuffled ports
 
 ```bash
-python3 smrib.py --targets 10.0.5.5 --ports "22,80,443,100-200" --fast --show-closed-terminal --csv Logs/log_fast_10_0_5_5.csv
+python3 smrib.py --targets 10.0.5.5 --ports "22,80,443,100-200" --fast --show-closed-terminal --csv logs/log_fast_10_0_5_5.csv
 ```
 
 **What it does:** Applies the aggressive fast profile, randomizes port order, prints closed ports to the terminal, and saves a CSV summary.
 
-### 5a. Running with defaults only
+### 6. Running with defaults only
 
 ```bash
 python3 smrib.py
@@ -147,7 +147,7 @@ python3 smrib.py
 
 **What it does:** Scans `hackthissite.org` across the top 100 ports using connect mode with concurrency 100, timeout 0.3 seconds, banner grabbing enabled, and the terminal restricted to open findings. Results are persisted automatically to `logs/results.csv` and `logs/results.json`. Adjust `PORTSCAN_*` variables or CLI flags to change these values.
 
-### 6. Batch-driven multi-run execution
+### 7. Batch-driven multi-run execution
 
 ```bash
 python3 smrib.py --batch batch.txt
@@ -155,7 +155,7 @@ python3 smrib.py --batch batch.txt
 
 **What it does:** Reads each non-comment line in `batch.txt` as a full CLI invocation and executes the scans sequentially.
 
-### 7. Compact diagnostic battery across a target list
+### 8. Compact diagnostic battery across a target list
 
 ```bash
 python3 smrib.py --batch-battery targets.txt --csv logs/batch_battery.csv --json logs/batch_battery.json
@@ -163,7 +163,7 @@ python3 smrib.py --batch-battery targets.txt --csv logs/batch_battery.csv --json
 
 **What it does:** Runs a curated set of TCP connect, SYN, and UDP checks (where permitted) against every entry in the target file, consolidating the results.
 
-### 8. Web directory enumeration helper
+### 9. Web directory enumeration helper
 
 ```bash
 python3 smrib.py --web-dir --url https://hotelasp.com --wordlist 'data/webdir_wordlist.txt'
@@ -177,7 +177,7 @@ The bundled wordlist (`webdir_wordlist.txt`) and top ports file (`top-ports.txt`
 
 - Terminal output focuses on open services by default. Use `--show-closed-terminal` to include closed/filtered results, or `--show-closed-terminal-only` to review them without persisting to disk.
 - Combine `--top-ports` with `--fast` for rapid reconnaissance on well-known services.
-- When writing to directories such as `Logs/`, ensure they exist beforehand: `mkdir -p Logs`.
+- When writing to directories such as `logs/`, SMRIB automatically creates missing parent folders. Double-check file permissions if artifacts fail to save.
 
 ## License
 

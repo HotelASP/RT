@@ -8,7 +8,7 @@
 # 1. Targeted TCP connect sweep with banner capture and explicit artifact names.
 #    *** PCAP needs root ***
 #    Command: sudo python3 smrib.py --targets 'targets.txt' --ports "21,22,80,443" --banner --csv 'logs/results.csv' --json 'logs/results.json' --pcap 'logs/results.pcap'
-#    Outcome: establishes full TCP sessions, captures available TLS banners, and stores results in the requested CSV/JSON/PCAP files.
+#    Outcome: establishes full TCP sessions, captures available service banners, and stores results in the requested CSV/JSON/PCAP files.
 #
 # 2. High-concurrency TCP SYN reconnaissance respecting rate guards.
 #    Command: sudo python3 smrib.py --targets 10.0.5.2 --start 1 --end 1024 --syn --rate 15 --concurrency 200 --csv 'logs/log_syn_10_0_5_2.csv'
@@ -129,7 +129,7 @@ class ScanRecord:
     status: str
     note: str
     banner: str
-    time: str
+    time_utc: str
     duration_ms: int
 
     def is_open(self) -> bool:
@@ -1487,7 +1487,7 @@ async def scan_all_selected_ports_for_host(target_ip: str,
                 status=status,
                 note=note,
                 banner=banner_text,
-                time=timestamp,
+                time_utc=timestamp,
                 duration_ms=duration_ms,
             )
             all_results_for_host.append(record)
@@ -2121,7 +2121,7 @@ def write_results_to_csv(
                     rec.status,
                     rec.note,
                     rec.banner,
-                    rec.time,
+                    rec.time_utc,
                     rec.duration_ms,
                 ])
         print(f"csv -> {csv_path}")
