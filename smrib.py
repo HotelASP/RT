@@ -700,7 +700,7 @@ async def run_ping_probe(
     output_blob = (stdout_data or b"") + (stderr_data or b"")
     raw_output = output_blob.decode("utf-8", errors="ignore")
     if not output_blob:
-        return PingObservation(success=True)
+        return PingObservation(success=False)
 
     output_text_lower = raw_output.lower()
 
