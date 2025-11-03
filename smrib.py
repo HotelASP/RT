@@ -159,6 +159,18 @@ class InterfaceNetwork:
 
 
 @dataclass
+class PingObservation:
+    """Details extracted from a successful ping probe."""
+
+    success: bool
+    latency_ms: Optional[float] = None
+    ttl: Optional[int] = None
+    packets_transmitted: Optional[int] = None
+    packets_received: Optional[int] = None
+    raw_output: str = ""
+
+
+@dataclass
 class PortScanConfiguration:
     """Parameters required to reuse the port scanner for discovered hosts."""
 
@@ -621,7 +633,46 @@ def determine_ping_command() -> Optional[List[str]]:
     return [ping_path, "-n", "-c", "1", "-W", "1"]
 
 
-async def run_ping_probe(ip_text: str, ping_command: List[str], timeout_seconds: float) -> bool:
+def _parse_latency_from_ping(output_text: str) -> Optional[float]:
+
+    latency_pattern = re.compile(r"time[=<]\s*([0-9]+(?:\.[0-9]+)?)\s*([a-z]+)")
+    match = latency_pattern.search(output_text)
+    if not match:
+        return None
+    value = float(match.group(1))
+    unit = match.group(2)
+    if unit == "ms":
+        return value
+    if unit == "s":
+        return value * 1000.0
+    if unit == "us":
+        return value / 1000.0
+    return value
+
+
+def _parse_ttl_from_ping(output_text: str) -> Optional[int]:
+
+    ttl_pattern = re.compile(r"ttl[= ](\d+)")
+    match = ttl_pattern.search(output_text)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _parse_packet_stats_from_ping(output_text: str) -> Tuple[Optional[int], Optional[int]]:
+
+    transmitted_pattern = re.compile(r"(\d+)\s+(?:packets\s+)?transmitted")
+    received_pattern = re.compile(r"(\d+)\s+(?:packets\s+)?received")
+    transmitted_match = transmitted_pattern.search(output_text)
+    received_match = received_pattern.search(output_text)
+    transmitted = int(transmitted_match.group(1)) if transmitted_match else None
+    received = int(received_match.group(1)) if received_match else None
+    return transmitted, received
+
+
+async def run_ping_probe(
+    ip_text: str, ping_command: List[str], timeout_seconds: float
+) -> PingObservation:
 
     try:
         process = await asyncio.create_subprocess_exec(
@@ -631,7 +682,7 @@ async def run_ping_probe(ip_text: str, ping_command: List[str], timeout_seconds:
             stderr=subprocess.PIPE,
         )
     except FileNotFoundError:
-        return False
+        return PingObservation(success=False)
 
     try:
         stdout_data, stderr_data = await asyncio.wait_for(
@@ -642,26 +693,27 @@ async def run_ping_probe(ip_text: str, ping_command: List[str], timeout_seconds:
             process.kill()
         with contextlib.suppress(Exception):
             await process.wait()
-        return False
+        return PingObservation(success=False)
     if process.returncode != 0:
-        return False
+        return PingObservation(success=False)
 
     output_blob = (stdout_data or b"") + (stderr_data or b"")
+    raw_output = output_blob.decode("utf-8", errors="ignore")
     if not output_blob:
-        return True
+        return PingObservation(success=True)
 
-    output_text = output_blob.decode("utf-8", errors="ignore").lower()
+    output_text_lower = raw_output.lower()
 
     packet_loss_pattern = re.compile(r"(\d+)\s+(?:packets\s+)?received")
-    packet_loss_match = packet_loss_pattern.search(output_text)
+    packet_loss_match = packet_loss_pattern.search(output_text_lower)
     if packet_loss_match and packet_loss_match.group(1).isdigit():
         if int(packet_loss_match.group(1)) == 0:
-            return False
+            return PingObservation(success=False, raw_output=raw_output)
 
-    if "destination host unreachable" in output_text:
-        return False
-    if "100% packet loss" in output_text:
-        return False
+    if "destination host unreachable" in output_text_lower:
+        return PingObservation(success=False, raw_output=raw_output)
+    if "100% packet loss" in output_text_lower:
+        return PingObservation(success=False, raw_output=raw_output)
 
     success_markers = (
         "ttl=",
@@ -670,15 +722,48 @@ async def run_ping_probe(ip_text: str, ping_command: List[str], timeout_seconds:
         "reply from",
         "bytes from",
     )
-    if not any(marker in output_text for marker in success_markers):
-        return False
+    if not any(marker in output_text_lower for marker in success_markers):
+        return PingObservation(success=False, raw_output=raw_output)
 
-    return True
+    latency_ms = _parse_latency_from_ping(output_text_lower)
+    ttl = _parse_ttl_from_ping(output_text_lower)
+    transmitted, received = _parse_packet_stats_from_ping(output_text_lower)
+
+    return PingObservation(
+        success=True,
+        latency_ms=latency_ms,
+        ttl=ttl,
+        packets_transmitted=transmitted,
+        packets_received=received,
+        raw_output=raw_output,
+    )
+
+
+def format_ping_observation(observation: PingObservation) -> str:
+
+    if not observation.success:
+        return " (ping failed)"
+
+    details: List[str] = []
+    if observation.latency_ms is not None:
+        details.append(f"latency={observation.latency_ms:.2f} ms")
+    if observation.ttl is not None:
+        details.append(f"ttl={observation.ttl}")
+    if (
+        observation.packets_transmitted is not None
+        and observation.packets_received is not None
+    ):
+        details.append(
+            f"tx/rx={observation.packets_transmitted}/{observation.packets_received}"
+        )
+    if not details:
+        details.append("success")
+    return " (ping " + ", ".join(details) + ")"
 
 
 async def discover_hosts_on_interface(interface: InterfaceNetwork,
                                        ping_command: List[str],
-                                       on_host_found: Callable[[str], Awaitable[None]],
+                                       on_host_found: Callable[[str, PingObservation], Awaitable[None]],
                                        max_concurrency: int = 128,
                                        ping_timeout: float = 1.5) -> None:
 
@@ -693,11 +778,11 @@ async def discover_hosts_on_interface(interface: InterfaceNetwork,
         ip_text = str(address)
         try:
             async with semaphore:
-                alive = await run_ping_probe(ip_text, ping_command, ping_timeout)
+                observation = await run_ping_probe(ip_text, ping_command, ping_timeout)
         except Exception:
             return
-        if alive:
-            await on_host_found(ip_text)
+        if observation.success:
+            await on_host_found(ip_text, observation)
 
     candidate_addresses: List[ipaddress.IPv4Address] = list(interface.network.hosts())
 
@@ -1561,14 +1646,14 @@ async def perform_find_machines_discovery(interfaces: List[InterfaceNetwork],
         hosts_for_interface: List[str] = []
         scan_tasks: List[asyncio.Task] = []
 
-        async def handle_host(ip_text: str) -> None:
+        async def handle_host(ip_text: str, ping_observation: PingObservation) -> None:
             if ip_text in seen_hosts:
                 return
             seen_hosts.add(ip_text)
             hosts_for_interface.append(ip_text)
-            if port_configuration is None:
-                print(f"[find] responsive host: {ip_text}")
-            else:
+            ping_summary = format_ping_observation(ping_observation)
+            print(f"[find] responsive host: {ip_text}{ping_summary}")
+            if port_configuration is not None:
 
                 async def scan_and_collect(target_ip: str) -> None:
                     open_results, all_results = await run_port_scan_for_host(
@@ -1584,7 +1669,9 @@ async def perform_find_machines_discovery(interfaces: List[InterfaceNetwork],
                             f"[find] responsive host: {target_ip} (open ports: {ports_text})"
                         )
                     else:
-                        print(f"[find] responsive host: {target_ip}")
+                        print(
+                            f"[find] responsive host: {target_ip} (no open ports reported)"
+                        )
 
                 scan_tasks.append(asyncio.create_task(scan_and_collect(ip_text)))
 
