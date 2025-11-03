@@ -1913,14 +1913,9 @@ def run_find_machines_mode(parsed_arguments: argparse.Namespace) -> None:
     if getattr(parsed_arguments, "pcap", None):
         print("[find] Warning: --pcap is not supported alongside --find-machines and will be ignored.")
 
-    auto_show_only_open = False
-    if (
-        not getattr(parsed_arguments, "show_only_open", False)
-        and not getattr(parsed_arguments, "show_closed_terminal", False)
-        and not getattr(parsed_arguments, "show_closed_terminal_only", False)
-    ):
-        parsed_arguments.show_only_open = True
-        auto_show_only_open = True
+    auto_show_only_open = bool(
+        getattr(parsed_arguments, "_show_only_open_default_applied", False)
+    )
 
     port_configuration: Optional[PortScanConfiguration] = None
     if ports_requested_explicitly(parsed_arguments):
@@ -2341,7 +2336,11 @@ def build_cli_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--show-only-open",
         action="store_true",
-        help="Only print OPEN results in the terminal output."
+        default=None,
+        help=(
+            "Only print OPEN results in the terminal output (default behaviour "
+            "unless a --show-closed-terminal* flag is provided)."
+        ),
     )
 
     parser.add_argument(
@@ -2495,6 +2494,30 @@ def build_cli_parser() -> argparse.ArgumentParser:
     )
 
     return parser
+
+
+def apply_default_terminal_visibility(arguments: argparse.Namespace) -> bool:
+    """Enable --show-only-open when no other terminal visibility flags are provided."""
+
+    if hasattr(arguments, "_show_only_open_default_applied"):
+        return bool(getattr(arguments, "_show_only_open_default_applied", False))
+
+    show_closed_terminal = bool(getattr(arguments, "show_closed_terminal", False))
+    show_closed_terminal_only = bool(getattr(arguments, "show_closed_terminal_only", False))
+    show_only_open_value = getattr(arguments, "show_only_open", None)
+
+    default_applied = False
+    if show_only_open_value is None:
+        if not show_closed_terminal and not show_closed_terminal_only:
+            arguments.show_only_open = True
+            default_applied = True
+        else:
+            arguments.show_only_open = False
+    else:
+        arguments.show_only_open = bool(show_only_open_value)
+
+    setattr(arguments, "_show_only_open_default_applied", default_applied)
+    return default_applied
 
 # [AUTO]Execute the complete scanning workflow for supplied arguments.
 def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[ScanRecord], List[ScanRecord]]:
@@ -2762,6 +2785,7 @@ def run_batch_from_file(spec_file: str) -> None:
             except SystemExit:
                 print(f"[BATCH-{line_no}] Invalid spec: {raw.strip()}")
                 continue
+            apply_default_terminal_visibility(args)
             run_full_scan(args)
 
 def determine_batch_battery_ports(
@@ -2834,6 +2858,8 @@ def determine_batch_battery_ports(
 # [AUTO]Execute a compact verification suite against provided targets.
 def run_batch_battery(targets_file: str,
                       base_arguments: argparse.Namespace) -> None:
+
+    apply_default_terminal_visibility(base_arguments)
 
     top_ports_override_from_batch: Optional[int] = None
     normalized_path = os.path.expanduser(str(targets_file))
@@ -3096,6 +3122,8 @@ def main() -> None:
         args = cli_parser.parse_args(implicit_defaults)
     else:
         args = cli_parser.parse_args(provided_arguments)
+
+    apply_default_terminal_visibility(args)
 
     if getattr(args, "web_dir", False):
         success = run_web_directory_listing_tool(args.url, args.wordlist)

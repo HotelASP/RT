@@ -50,7 +50,7 @@ The table below summarises the most commonly adjusted parameters, their default 
 | `--retry-backoff` | Exponential backoff base in seconds between retries. | `0.2` | n/a |
 | `--fast` | Enables aggressive mode tuning (see below). | `False` | n/a |
 
-All other CLI switches fall back to sane defaults (`False` for boolean toggles, no output files unless requested). When you launch the tool with no parameters, SMRIB automatically enables `--show-only-open`, `--banner`, `--top-ports 100`, `--csv logs/results.csv`, and `--json logs/results.json` to provide a rich out-of-the-box experience. Any combination of flags can be supplied alongside the defaults; unspecified options keep their default values.
+All other CLI switches fall back to sane defaults (`False` for boolean toggles unless noted, no output files unless requested). When you launch the tool with no parameters, SMRIB automatically enables `--show-only-open`, `--banner`, `--top-ports 100`, `--csv logs/results.csv`, and `--json logs/results.json` to provide a rich out-of-the-box experience. The terminal now defaults to showing only open services unless a `--show-closed-terminal*` flag is supplied, but any combination of flags can be supplied alongside the defaults; unspecified options keep their default values.
 
 ### What `--fast` mode changes
 
@@ -175,8 +175,7 @@ The bundled wordlist (`webdir_wordlist.txt`) and top ports file (`top-ports.txt`
 
 ## Tips
 
-- Use `--show-only-open` to focus terminal output on open services. When this flag is active, the persisted CSV/JSON artifacts
-  are filtered to the same open-only view unless you explicitly enable one of the `--show-closed-*` options.
+- Terminal output focuses on open services by default. Use `--show-closed-terminal` to include closed/filtered results, or `--show-closed-terminal-only` to review them without persisting to disk.
 - Combine `--top-ports` with `--fast` for rapid reconnaissance on well-known services.
 - When writing to directories such as `Logs/`, ensure they exist beforehand: `mkdir -p Logs`.
 
