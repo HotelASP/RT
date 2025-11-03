@@ -96,6 +96,15 @@ DEFAULTS: Dict[str, object] = {
 
 SCRIPT_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 DATA_DIRECTORY = os.path.join(SCRIPT_DIRECTORY, "data")
+LOGS_DIRECTORY = os.path.join(SCRIPT_DIRECTORY, "logs")
+
+
+def default_log_artifact_path(filename: str) -> str:
+    """Return an absolute path inside the logs directory for auto artifacts."""
+
+    if os.path.isabs(filename):
+        return filename
+    return os.path.join(LOGS_DIRECTORY, filename)
 
 TOP_PORTS_FILENAME = "top-ports.txt"
 DEFAULT_BATCH_BATTERY_TOP_PORTS = 200
@@ -1954,12 +1963,18 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[ScanRecord
 
     timestamp_for_auto_files = ts_utc_compact()
     if parsed_arguments.csv == "AUTO":
-        parsed_arguments.csv = f"scan_csv_{timestamp_for_auto_files}.csv"
+        parsed_arguments.csv = default_log_artifact_path(
+            f"scan_csv_{timestamp_for_auto_files}.csv"
+        )
     if parsed_arguments.json == "AUTO":
-        parsed_arguments.json = f"scan_json_{timestamp_for_auto_files}.json"
+        parsed_arguments.json = default_log_artifact_path(
+            f"scan_json_{timestamp_for_auto_files}.json"
+        )
 
     if parsed_arguments.pcap == "AUTO":
-        parsed_arguments.pcap = f"scan_pcap_{timestamp_for_auto_files}"
+        parsed_arguments.pcap = default_log_artifact_path(
+            f"scan_pcap_{timestamp_for_auto_files}"
+        )
 
     print("*** SMRIB PORT SCANNER ***")
     print("")
@@ -2453,14 +2468,26 @@ def run_batch_battery(targets_file: str,
     timestamp_for_auto_files = ts_utc_compact()
 
     if base_arguments.csv:
-        csv_filename = base_arguments.csv if base_arguments.csv != "AUTO" else f"test_csv_{timestamp_for_auto_files}.csv"
+        csv_filename = (
+            base_arguments.csv
+            if base_arguments.csv != "AUTO"
+            else default_log_artifact_path(
+                f"test_csv_{timestamp_for_auto_files}.csv"
+            )
+        )
         write_results_to_csv(
             csv_filename,
             rows_for_persistence,
             only_open=artifacts_show_only_open,
         )
     if base_arguments.json:
-        json_filename = base_arguments.json if base_arguments.json != "AUTO" else f"test_json_{timestamp_for_auto_files}.json"
+        json_filename = (
+            base_arguments.json
+            if base_arguments.json != "AUTO"
+            else default_log_artifact_path(
+                f"test_json_{timestamp_for_auto_files}.json"
+            )
+        )
         write_results_to_json(
             json_filename,
             rows_for_persistence,
