@@ -63,6 +63,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple, Any, Set
 
 if sys.platform != "win32":
@@ -275,6 +276,83 @@ def expand_targets_to_list(target_argument: str) -> List[str]:
     return [target_argument]
 
 # [AUTO]Detect whether an address should be treated as public internet space.
+def _resolve_targets_file_path(file_path: str) -> Optional[str]:
+
+    normalized = os.path.expanduser(str(file_path))
+    candidate_paths = [normalized]
+    if not os.path.isabs(normalized):
+        candidate_paths.append(os.path.join(SCRIPT_DIRECTORY, normalized))
+
+    for candidate in candidate_paths:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _parse_targets_file_into_networks(
+    resolved_path: str,
+    *,
+    quiet: bool = False,
+) -> Tuple[List[Tuple[ipaddress.IPv4Network, int]], Optional[bool]]:
+
+    networks: List[Tuple[ipaddress.IPv4Network, int]] = []
+    include_external_setting: Optional[bool] = None
+    seen: Set[str] = set()
+
+    try:
+        with open(resolved_path, "r", encoding="utf-8") as handle:
+            for line_number, raw_line in enumerate(handle, 1):
+                stripped = raw_line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                candidate = stripped.split("#", 1)[0].strip()
+                if not candidate:
+                    continue
+                if "=" in candidate:
+                    key, value = [segment.strip() for segment in candidate.split("=", 1)]
+                    if key.lower() == "include_external":
+                        try:
+                            include_external_setting = interpret_boolean_choice(value)
+                        except ValueError:
+                            if not quiet:
+                                print(
+                                    f"[find] Invalid include_external value '{value}' on line {line_number} "
+                                    f"of {resolved_path}. Expected yes/no or true/false."
+                                )
+                        continue
+                try:
+                    network = ipaddress.IPv4Network(candidate, strict=False)
+                except ValueError:
+                    if not quiet:
+                        print(
+                            f"[find] Skipping invalid network '{candidate}' on line {line_number} "
+                            f"of {resolved_path}."
+                        )
+                    continue
+                key = network.with_prefixlen
+                if key in seen:
+                    continue
+                seen.add(key)
+                networks.append((network, line_number))
+    except OSError as exc:
+        if not quiet:
+            print(f"[find] Unable to read additional targets file {resolved_path}: {exc}")
+        return [], include_external_setting
+
+    return networks, include_external_setting
+
+
+@lru_cache(maxsize=1)
+def _load_internal_ipv4_networks_from_file() -> List[ipaddress.IPv4Network]:
+
+    resolved_path = _resolve_targets_file_path(DEFAULT_FIND_TARGETS_FILENAME)
+    if resolved_path is None:
+        return []
+
+    entries, _ = _parse_targets_file_into_networks(resolved_path, quiet=True)
+    return [network for network, _ in entries]
+
+
 def is_external_ip(ip_text: str) -> bool:
 
     try:
@@ -282,14 +360,27 @@ def is_external_ip(ip_text: str) -> bool:
     except ValueError:
         return True
 
+    configured_networks: List[ipaddress.IPv4Network] = []
+    matched_configured_network = False
+
+    if isinstance(ip_obj, ipaddress.IPv4Address):
+        configured_networks = _load_internal_ipv4_networks_from_file()
+        matched_configured_network = any(ip_obj in network for network in configured_networks)
+        if matched_configured_network:
+            return False
+
+    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast:
+        return False
+
+    if getattr(ip_obj, "is_reserved", False):
+        if isinstance(ip_obj, ipaddress.IPv4Address):
+            return not matched_configured_network
+        return False
+
     is_global_attribute = getattr(ip_obj, "is_global", None)
     if is_global_attribute is not None:
         return bool(is_global_attribute)
 
-    if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast:
-        return False
-    if getattr(ip_obj, "is_reserved", False):
-        return False
     return True
 
 
@@ -628,68 +719,25 @@ async def discover_hosts_on_interface(interface: InterfaceNetwork,
 
 def load_additional_find_networks(file_path: str) -> Tuple[List[InterfaceNetwork], Optional[bool]]:
 
-    normalized = os.path.expanduser(str(file_path))
-    candidate_paths = [normalized]
-    if not os.path.isabs(normalized):
-        candidate_paths.append(os.path.join(SCRIPT_DIRECTORY, normalized))
-
-    resolved_path = None
-    for candidate in candidate_paths:
-        if os.path.isfile(candidate):
-            resolved_path = candidate
-            break
-
+    resolved_path = _resolve_targets_file_path(file_path)
     if resolved_path is None:
         print(f"[find] Additional targets file not found: {file_path}")
         return [], None
 
-    networks: List[InterfaceNetwork] = []
-    seen: Set[str] = set()
-    include_external_setting: Optional[bool] = None
-    try:
-        with open(resolved_path, "r", encoding="utf-8") as handle:
-            for line_number, raw_line in enumerate(handle, 1):
-                stripped = raw_line.strip()
-                if not stripped or stripped.startswith("#"):
-                    continue
-                candidate = stripped.split("#", 1)[0].strip()
-                if not candidate:
-                    continue
-                if "=" in candidate:
-                    key, value = [segment.strip() for segment in candidate.split("=", 1)]
-                    if key.lower() == "include_external":
-                        try:
-                            include_external_setting = interpret_boolean_choice(value)
-                        except ValueError:
-                            print(
-                                f"[find] Invalid include_external value '{value}' on line {line_number} "
-                                f"of {resolved_path}. Expected yes/no or true/false."
-                            )
-                        continue
-                try:
-                    network = ipaddress.IPv4Network(candidate, strict=False)
-                except ValueError:
-                    print(
-                        f"[find] Skipping invalid network '{candidate}' on line {line_number} "
-                        f"of {resolved_path}."
-                    )
-                    continue
-                representative = str(network.network_address)
-                key = network.with_prefixlen
-                if key in seen:
-                    continue
-                seen.add(key)
-                networks.append(
-                    InterfaceNetwork(
-                        name=f"file:{os.path.basename(resolved_path)}:{line_number}",
-                        network=network,
-                        local_ip=network.network_address,
-                        source="file",
-                    )
-                )
-    except OSError as exc:
-        print(f"[find] Unable to read additional targets file {resolved_path}: {exc}")
-        return [], include_external_setting
+    parsed_networks, include_external_setting = _parse_targets_file_into_networks(
+        resolved_path,
+        quiet=False,
+    )
+
+    networks: List[InterfaceNetwork] = [
+        InterfaceNetwork(
+            name=f"file:{os.path.basename(resolved_path)}:{line_number}",
+            network=network,
+            local_ip=network.network_address,
+            source="file",
+        )
+        for network, line_number in parsed_networks
+    ]
 
     if networks:
         print(
