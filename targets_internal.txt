@@ -10,15 +10,15 @@
 # 192.168.0.0/16 — Consumer/SOHO routers, Wi-Fi gateways, and many hypervisor defaults.
 192.168.0.0/16
 # 172.16.0.0/16 — Common on-premises corporate VLANs and VMware/Hyper-V management networks.
-172.16.0.0/16
+#172.16.0.0/16
 # 172.17.0.0/16 — Docker default bridge networks and container platforms.
-172.17.0.0/16
+#172.17.0.0/16
 # 10.0.0.0/16 — Frequently used by corporate LANs and Azure Virtual Networks.
-10.0.0.0/16
+#10.0.0.0/16
 # 10.1.0.0/16 — Enterprise DMZ segments and lab environments.
-10.1.0.0/16
+#10.1.0.0/16
 # 10.10.0.0/16 — Popular for lab ranges, VPN pools, and penetration testing sandboxes.
-10.10.0.0/16
+#10.10.0.0/16
 
 # ---------------------------------------------------------------------------
 # Optional/private ranges (commented for reference; remove "#" to enable)
