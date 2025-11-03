@@ -715,6 +715,14 @@ async def run_ping_probe(
     if "100% packet loss" in output_text_lower:
         return PingObservation(success=False, raw_output=raw_output)
 
+    anomaly_markers = (
+        "wrong data byte",
+        "invalid tv_usec",
+        "time of day goes back",
+    )
+    if any(marker in output_text_lower for marker in anomaly_markers):
+        return PingObservation(success=False, raw_output=raw_output)
+
     success_markers = (
         "ttl=",
         "time=",
