@@ -729,6 +729,16 @@ async def run_ping_probe(
     ttl = _parse_ttl_from_ping(output_text_lower)
     transmitted, received = _parse_packet_stats_from_ping(output_text_lower)
 
+    if latency_ms is not None and latency_ms <= 0.0:
+        return PingObservation(
+            success=False,
+            latency_ms=latency_ms,
+            ttl=ttl,
+            packets_transmitted=transmitted,
+            packets_received=received,
+            raw_output=raw_output,
+        )
+
     return PingObservation(
         success=True,
         latency_ms=latency_ms,
