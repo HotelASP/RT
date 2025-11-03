@@ -4,11 +4,27 @@
 # Optional directive: include_external=yes|no to influence --find-include-external defaults.
 # When omitted, external discovery remains enabled by default.
 
+192.168.3.0/24
+192.168.30.0/24
+192.168.40.0/24
+192.168.50.0/24
+192.168.60.0/24
+192.168.200.0/24
+192.168.201.0/24
+
+192.168.103.0/24
+192.168.13.0/24
+82.154.255.0/24
+144.64.224.0/24
+
+#192.168.0.0/24
+#192.168.1.0/24
+
 # ---------------------------------------------------------------------------
 # Active internal ranges (queried when this file is supplied)
 # ---------------------------------------------------------------------------
 # 192.168.0.0/16 — Consumer/SOHO routers, Wi-Fi gateways, and many hypervisor defaults.
-192.168.0.0/16
+#192.168.0.0/16
 # 172.16.0.0/16 — Common on-premises corporate VLANs and VMware/Hyper-V management networks.
 #172.16.0.0/16
 # 172.17.0.0/16 — Docker default bridge networks and container platforms.
