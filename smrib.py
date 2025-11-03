@@ -536,21 +536,43 @@ async def run_ping_probe(ip_text: str, ping_command: List[str], timeout_seconds:
         process = await asyncio.create_subprocess_exec(
             *ping_command,
             ip_text,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
     except FileNotFoundError:
         return False
 
     try:
-        await asyncio.wait_for(process.communicate(), timeout_seconds)
+        stdout_data, stderr_data = await asyncio.wait_for(
+            process.communicate(), timeout_seconds
+        )
     except asyncio.TimeoutError:
         with contextlib.suppress(ProcessLookupError):
             process.kill()
         with contextlib.suppress(Exception):
             await process.wait()
         return False
-    return process.returncode == 0
+    if process.returncode != 0:
+        return False
+
+    output_blob = (stdout_data or b"") + (stderr_data or b"")
+    if not output_blob:
+        return True
+
+    output_text = output_blob.decode("utf-8", errors="ignore").lower()
+
+    packet_loss_pattern = re.compile(r"(\d+)\s+(?:packets\s+)?received")
+    packet_loss_match = packet_loss_pattern.search(output_text)
+    if packet_loss_match and packet_loss_match.group(1).isdigit():
+        if int(packet_loss_match.group(1)) == 0:
+            return False
+
+    if "destination host unreachable" in output_text:
+        return False
+    if "100% packet loss" in output_text:
+        return False
+
+    return True
 
 
 async def discover_hosts_on_interface(interface: InterfaceNetwork,
@@ -1479,13 +1501,25 @@ async def perform_find_machines_discovery(interfaces: List[InterfaceNetwork],
                 return
             seen_hosts.add(ip_text)
             hosts_for_interface.append(ip_text)
-            print(f"[find] {interface.name} responsive host: {ip_text}")
-            if port_configuration is not None:
+            if port_configuration is None:
+                print(f"[find] responsive host: {ip_text}")
+            else:
 
                 async def scan_and_collect(target_ip: str) -> None:
-                    open_results, all_results = await run_port_scan_for_host(target_ip, port_configuration)
+                    open_results, all_results = await run_port_scan_for_host(
+                        target_ip, port_configuration
+                    )
                     aggregated_open_results.extend(open_results)
                     aggregated_all_results.extend(all_results)
+
+                    open_ports = sorted({record.port for record in open_results})
+                    if open_ports:
+                        ports_text = ", ".join(str(port) for port in open_ports)
+                        print(
+                            f"[find] responsive host: {target_ip} (open ports: {ports_text})"
+                        )
+                    else:
+                        print(f"[find] responsive host: {target_ip}")
 
                 scan_tasks.append(asyncio.create_task(scan_and_collect(ip_text)))
 
