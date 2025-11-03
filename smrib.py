@@ -1889,17 +1889,17 @@ def run_find_machines_mode(parsed_arguments: argparse.Namespace) -> None:
     merge_interfaces(additional_interfaces)
     merge_interfaces(ping_file_interfaces)
 
-    ping_timeout_value = getattr(parsed_arguments, "find_machines_ping_timeout", 0.3)
+    ping_timeout_value = getattr(parsed_arguments, "find_machines_ping_timeout", 1.5)
     try:
         ping_timeout = float(ping_timeout_value)
     except (TypeError, ValueError):
         print(
-            f"[find] Invalid ping timeout {ping_timeout_value!r}; defaulting to 0.3 seconds."
+            f"[find] Invalid ping timeout {ping_timeout_value!r}; defaulting to 1.5 seconds."
         )
-        ping_timeout = 0.3
+        ping_timeout = 1.5
     if ping_timeout <= 0:
-        print("[find] Ping timeout must be positive; defaulting to 0.3 seconds.")
-        ping_timeout = 0.3
+        print("[find] Ping timeout must be positive; defaulting to 1.5 seconds.")
+        ping_timeout = 1.5
 
     if not interfaces:
         print("[find] No internal IPv4 interfaces or additional networks detected.")
@@ -2490,8 +2490,8 @@ def build_cli_parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         dest="find_machines_ping_timeout",
         type=float,
-        default=0.3,
-        help="Timeout in seconds for each ping probe performed during --find-machines discovery. Defaults to 0.3 seconds.",
+        default=1.5,
+        help="Timeout in seconds for each ping probe performed during --find-machines discovery. Defaults to 1.5 seconds.",
     )
 
     return parser
