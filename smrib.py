@@ -572,6 +572,16 @@ async def run_ping_probe(ip_text: str, ping_command: List[str], timeout_seconds:
     if "100% packet loss" in output_text:
         return False
 
+    success_markers = (
+        "ttl=",
+        "time=",
+        "time<",
+        "reply from",
+        "bytes from",
+    )
+    if not any(marker in output_text for marker in success_markers):
+        return False
+
     return True
 
 
