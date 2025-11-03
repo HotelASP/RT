@@ -553,7 +553,16 @@ async def discover_hosts_on_interface(interface: InterfaceNetwork,
         if alive:
             await on_host_found(ip_text)
 
-    for candidate in interface.network.hosts():
+    candidate_addresses: List[ipaddress.IPv4Address] = list(interface.network.hosts())
+
+    if not candidate_addresses:
+        candidate_addresses.append(interface.network.network_address)
+        if interface.network.num_addresses > 1:
+            broadcast = interface.network.broadcast_address
+            if broadcast not in candidate_addresses:
+                candidate_addresses.append(broadcast)
+
+    for candidate in candidate_addresses:
         tasks.append(asyncio.create_task(probe(candidate)))
 
     if not tasks:
