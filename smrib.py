@@ -45,21 +45,25 @@ import asyncio
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
+import contextlib
 import csv
 import ipaddress
 import json
 import os
+import platform
 import random
 import re
 import shlex
+import shutil
 import socket
+import subprocess
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple, Any, Set
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple, Any, Set
 
 if sys.platform != "win32":
     import resource  # type: ignore[attr-defined]
@@ -126,6 +130,30 @@ class ScanRecord:
 
         return asdict(self)
 
+
+@dataclass
+class InterfaceNetwork:
+    """Description of a local network interface with an IPv4 assignment."""
+
+    name: str
+    ipv4: ipaddress.IPv4Interface
+
+
+@dataclass
+class PortScanConfiguration:
+    """Parameters required to reuse the port scanner for discovered hosts."""
+
+    ports: List[int]
+    mode: str
+    concurrency: int
+    timeout: float
+    show_closed: bool
+    show_only_open: bool
+    banner: bool
+    rate: int
+    udp_probe: str
+    retries: int
+    backoff: float
 
 class StoreValueAndMarkExplicit(argparse.Action):
     """argparse action that records whether a CLI option was provided explicitly."""
@@ -245,6 +273,166 @@ def is_external_ip(ip_text: str) -> bool:
     if getattr(ip_obj, "is_reserved", False):
         return False
     return True
+
+
+def gather_local_ipv4_interfaces() -> List[InterfaceNetwork]:
+
+    def add_interface(result: Dict[Tuple[str, str, str], InterfaceNetwork], name: str,
+                      address: str, netmask: str) -> None:
+        if not address or not netmask:
+            return
+        try:
+            ipv4_interface = ipaddress.IPv4Interface(f"{address}/{netmask}")
+        except Exception:
+            return
+        ip_text = str(ipv4_interface.ip)
+        if is_external_ip(ip_text):
+            return
+        if ipv4_interface.ip.is_loopback:
+            return
+        key = (name, ip_text, ipv4_interface.network.with_prefixlen)
+        if key in result:
+            return
+        result[key] = InterfaceNetwork(name=name, ipv4=ipv4_interface)
+
+    collected: Dict[Tuple[str, str, str], InterfaceNetwork] = {}
+
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        psutil = None  # type: ignore
+
+    if psutil is not None:
+        try:
+            for interface_name, addresses in psutil.net_if_addrs().items():  # type: ignore[attr-defined]
+                for address in addresses:
+                    if getattr(address, "family", None) != socket.AF_INET:
+                        continue
+                    ip_value = getattr(address, "address", "") or ""
+                    netmask_value = getattr(address, "netmask", "") or ""
+                    add_interface(collected, interface_name, ip_value, netmask_value)
+        except Exception:
+            pass
+
+    if not collected:
+        try:
+            output = subprocess.run(
+                ["ip", "-o", "-f", "inet", "addr", "show"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            for line in output.stdout.splitlines():
+                parts = line.split()
+                if len(parts) < 4:
+                    continue
+                name = parts[1]
+                address_cidr = parts[3]
+                if "/" not in address_cidr:
+                    continue
+                try:
+                    ipv4_interface = ipaddress.IPv4Interface(address_cidr)
+                except Exception:
+                    continue
+                add_interface(collected, name, str(ipv4_interface.ip), str(ipv4_interface.network.netmask))
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass
+
+    if not collected:
+        try:
+            output = subprocess.run(["ifconfig"], capture_output=True, text=True, check=True)
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            output = None
+        if output is not None:
+            current_interface = ""
+            for line in output.stdout.splitlines():
+                if line and not line[0].isspace():
+                    current_interface = line.split(":", 1)[0].strip()
+                    continue
+                line = line.strip()
+                if not line or not current_interface:
+                    continue
+                match = re.search(r"inet (?!6)([0-9.]+)(?:\s+netmask\s+([^\s]+))?", line)
+                if not match:
+                    continue
+                address = match.group(1)
+                netmask = match.group(2) or ""
+                if netmask.lower().startswith("0x"):
+                    try:
+                        int_mask = int(netmask, 16)
+                        netmask = socket.inet_ntoa(int_mask.to_bytes(4, byteorder="big"))
+                    except Exception:
+                        netmask = ""
+                add_interface(collected, current_interface, address, netmask)
+
+    return sorted(collected.values(), key=lambda item: (item.name, int(item.ipv4.network.network_address)))
+
+
+def determine_ping_command() -> Optional[List[str]]:
+
+    ping_path = shutil.which("ping")
+    if not ping_path:
+        return None
+    system_name = platform.system().lower()
+    if system_name == "windows":
+        return [ping_path, "-n", "1", "-w", "1000"]
+    if system_name == "darwin":
+        return [ping_path, "-n", "-c", "1", "-W", "1000"]
+    return [ping_path, "-n", "-c", "1", "-W", "1"]
+
+
+async def run_ping_probe(ip_text: str, ping_command: List[str], timeout_seconds: float) -> bool:
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *ping_command,
+            ip_text,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        return False
+
+    try:
+        await asyncio.wait_for(process.communicate(), timeout_seconds)
+    except asyncio.TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+        with contextlib.suppress(Exception):
+            await process.wait()
+        return False
+    return process.returncode == 0
+
+
+async def discover_hosts_on_interface(interface: InterfaceNetwork,
+                                       ping_command: List[str],
+                                       on_host_found: Callable[[str], Awaitable[None]],
+                                       max_concurrency: int = 128,
+                                       ping_timeout: float = 1.5) -> None:
+
+    semaphore = asyncio.Semaphore(max(1, max_concurrency))
+    local_ip = interface.ipv4.ip
+    tasks: List[asyncio.Task] = []
+
+    async def probe(address: ipaddress.IPv4Address) -> None:
+        if address == local_ip:
+            return
+        ip_text = str(address)
+        try:
+            async with semaphore:
+                alive = await run_ping_probe(ip_text, ping_command, ping_timeout)
+        except Exception:
+            return
+        if alive:
+            await on_host_found(ip_text)
+
+    for candidate in interface.ipv4.network.hosts():
+        tasks.append(asyncio.create_task(probe(candidate)))
+
+    if not tasks:
+        return
+
+    await asyncio.gather(*tasks, return_exceptions=False)
 
 # [AUTO]Tune parameters aggressively when --fast is active.
 def apply_fast_mode_overrides(parsed_arguments: argparse.Namespace) -> Optional[Dict[str, object]]:
@@ -482,6 +670,29 @@ def parse_port_specification(start_port: int, end_port: int, port_spec: Optional
 
     valid_sorted_unique.sort()
     return valid_sorted_unique
+
+
+def select_ports_for_arguments(parsed_arguments: argparse.Namespace) -> Tuple[List[int], Optional[int]]:
+
+    top_ports_requested = getattr(parsed_arguments, "top_ports", None)
+    if top_ports_requested is not None:
+        ignored_parts = ["--start/--end range"]
+        if getattr(parsed_arguments, "ports", None):
+            ignored_parts.append("--ports specification")
+        ignored_text = " and ".join(ignored_parts)
+        print(f"[info] Using top ports list; ignoring {ignored_text}.")
+        ports_selected = load_top_ports_from_file(
+            top_ports_requested,
+            getattr(parsed_arguments, "top_ports_file", None),
+        )
+        return ports_selected, top_ports_requested
+
+    ports_selected = parse_port_specification(
+        parsed_arguments.start,
+        parsed_arguments.end,
+        getattr(parsed_arguments, "ports", None),
+    )
+    return ports_selected, None
 
 
 async def resolve_dns_label_to_ip(dns_label: str) -> str:
@@ -863,6 +1074,37 @@ async def scan_all_selected_ports_for_host(target_ip: str,
 
     return confirmed_open_results, all_results_for_host
 
+
+async def run_port_scan_for_host(target_ip: str,
+                                 configuration: PortScanConfiguration) -> None:
+
+    try:
+        open_results, all_results = await scan_all_selected_ports_for_host(
+            target_ip=target_ip,
+            selected_ports=configuration.ports,
+            selected_mode=configuration.mode,
+            timeout_seconds=configuration.timeout,
+            max_concurrency=configuration.concurrency,
+            show_closed_in_output=configuration.show_closed,
+            show_only_open_in_output=configuration.show_only_open,
+            banner_enabled=configuration.banner,
+            per_host_ops_per_sec=configuration.rate,
+            udp_probe_kind=configuration.udp_probe,
+            retries=configuration.retries,
+            backoff_seconds=configuration.backoff,
+        )
+    except Exception as exc:
+        print(f"[find] Error scanning {target_ip}: {exc}")
+        return
+
+    emit_summary_for_suppressed_results(
+        host_label=target_ip,
+        ip_address=target_ip,
+        show_only_open_flag=configuration.show_only_open,
+        open_results=open_results,
+        all_results=all_results,
+    )
+
 # Provide a hint when --show-only-open hides every result for a host.
 def emit_summary_for_suppressed_results(host_label: str,
                                         ip_address: str,
@@ -896,6 +1138,209 @@ def emit_summary_for_suppressed_results(host_label: str,
         f"Most frequent response: {description}. "
         f"Re-run without --show-only-open to review all results."
     )
+
+
+def ports_requested_explicitly(parsed_arguments: argparse.Namespace) -> bool:
+
+    explicit_flags = (
+        getattr(parsed_arguments, "ports_explicit", False),
+        getattr(parsed_arguments, "top_ports_explicit", False),
+        getattr(parsed_arguments, "start_explicit", False),
+        getattr(parsed_arguments, "end_explicit", False),
+    )
+    return any(bool(flag) for flag in explicit_flags)
+
+
+def prepare_port_scan_configuration(parsed_arguments: argparse.Namespace) -> Optional[PortScanConfiguration]:
+
+    ports_selected, top_ports_requested = select_ports_for_arguments(parsed_arguments)
+    if not ports_selected:
+        print("No ports selected; port scanning disabled for discovered hosts.")
+        return None
+
+    if getattr(parsed_arguments, "shuffle", False):
+        random.shuffle(ports_selected)
+
+    scan_mode = "connect"
+    if getattr(parsed_arguments, "syn", False):
+        scan_mode = "syn"
+    elif getattr(parsed_arguments, "udp", False):
+        scan_mode = "udp"
+
+    normalized_concurrency, concurrency_notice = normalize_concurrency_for_mode(
+        parsed_arguments.concurrency,
+        scan_mode,
+    )
+    parsed_arguments.concurrency = normalized_concurrency
+    if concurrency_notice:
+        print(concurrency_notice)
+
+    ensure_prerequisites_for_scapy(scan_mode)
+
+    if top_ports_requested is not None:
+        print(f"[find] Scanning discovered hosts using the top {len(ports_selected)} ports.")
+    else:
+        print(f"[find] Scanning discovered hosts across {len(ports_selected)} configured port(s).")
+
+    return PortScanConfiguration(
+        ports=ports_selected,
+        mode=scan_mode,
+        concurrency=normalized_concurrency,
+        timeout=float(parsed_arguments.timeout),
+        show_closed=bool(
+            getattr(parsed_arguments, "show_closed_terminal", False)
+            or getattr(parsed_arguments, "show_closed_terminal_only", False)
+        ),
+        show_only_open=bool(getattr(parsed_arguments, "show_only_open", False)),
+        banner=bool(getattr(parsed_arguments, "banner", False)),
+        rate=int(getattr(parsed_arguments, "rate", 0)),
+        udp_probe=str(getattr(parsed_arguments, "udp_probe", "empty")),
+        retries=int(getattr(parsed_arguments, "retries", 1)),
+        backoff=float(getattr(parsed_arguments, "retry_backoff", 0.0)),
+    )
+
+
+async def perform_find_machines_discovery(interfaces: List[InterfaceNetwork],
+                                          ping_command: List[str],
+                                          port_configuration: Optional[PortScanConfiguration]) -> List[Tuple[InterfaceNetwork, List[str]]]:
+
+    aggregated: List[Tuple[InterfaceNetwork, List[str]]] = []
+    seen_hosts: Set[str] = set()
+
+    for interface in interfaces:
+        network = interface.ipv4.network
+        if network.prefixlen >= 31:
+            potential_hosts = network.num_addresses
+        else:
+            potential_hosts = max(0, network.num_addresses - 2)
+
+        print(
+            f"[find] Interface {interface.name} -> {interface.ipv4.ip}/{network.prefixlen} "
+            f"network {network.network_address}/{network.prefixlen} ({potential_hosts} host candidates)"
+        )
+
+        if potential_hosts <= 0:
+            print(f"[find] {interface.name}: no addressable peers in this network.\n")
+            aggregated.append((interface, []))
+            continue
+
+        hosts_for_interface: List[str] = []
+        scan_tasks: List[asyncio.Task] = []
+
+        async def handle_host(ip_text: str) -> None:
+            if ip_text in seen_hosts:
+                return
+            seen_hosts.add(ip_text)
+            hosts_for_interface.append(ip_text)
+            print(f"[find] {interface.name} responsive host: {ip_text}")
+            if port_configuration is not None:
+                scan_tasks.append(asyncio.create_task(run_port_scan_for_host(ip_text, port_configuration)))
+
+        await discover_hosts_on_interface(
+            interface,
+            ping_command,
+            handle_host,
+        )
+
+        if scan_tasks:
+            await asyncio.gather(*scan_tasks, return_exceptions=False)
+
+        hosts_for_interface.sort(key=lambda value: ipaddress.IPv4Address(value))
+        aggregated.append((interface, hosts_for_interface))
+
+        if hosts_for_interface:
+            print(f"[find] {interface.name}: {len(hosts_for_interface)} host(s) responsive.\n")
+        else:
+            print(f"[find] {interface.name}: no responsive hosts detected.\n")
+
+    return aggregated
+
+
+def persist_discovered_targets(results: List[Tuple[InterfaceNetwork, List[str]]]) -> Optional[str]:
+
+    target_path = os.path.join(SCRIPT_DIRECTORY, "targets_found.txt")
+    try:
+        with open(target_path, "w", encoding="utf-8") as handle:
+            for interface, hosts in results:
+                network = interface.ipv4.network
+                handle.write(
+                    f"# interface {interface.name} address {interface.ipv4.ip}/{network.prefixlen} "
+                    f"network {network.network_address}/{network.prefixlen}\n"
+                )
+                for host in hosts:
+                    handle.write(f"{host}\n")
+                handle.write("\n")
+    except Exception as exc:
+        print(f"[find] Unable to write discovered targets to {target_path}: {exc}")
+        return None
+
+    return target_path
+
+
+# [AUTO]Discover responsive hosts across internal interfaces and optionally scan them.
+def run_find_machines_mode(parsed_arguments: argparse.Namespace) -> None:
+
+    interfaces = gather_local_ipv4_interfaces()
+    if not interfaces:
+        print("[find] No internal IPv4 interfaces detected.")
+        return
+
+    ping_command = determine_ping_command()
+    if ping_command is None:
+        print("[find] Unable to locate the system ping command. Install 'ping' to use --find-machines.")
+        sys.exit(1)
+
+    if getattr(parsed_arguments, "pcap", None):
+        print("[find] Warning: --pcap is not supported alongside --find-machines and will be ignored.")
+    if getattr(parsed_arguments, "csv", None):
+        print("[find] Warning: --csv output is not generated during --find-machines discovery.")
+    if getattr(parsed_arguments, "json", None):
+        print("[find] Warning: --json output is not generated during --find-machines discovery.")
+
+    port_configuration: Optional[PortScanConfiguration] = None
+    if ports_requested_explicitly(parsed_arguments):
+        fast_mode_adjustments = apply_fast_mode_overrides(parsed_arguments)
+        if fast_mode_adjustments is not None:
+            print("[fast] Fast mode adjustments applied for discovered host port scans.")
+            guardrail = fast_mode_adjustments.get("concurrency_guardrail_notice")
+            if guardrail:
+                print(f"[fast] {guardrail}")
+            auto_syn_reason = fast_mode_adjustments.get("auto_syn_reason")
+            if auto_syn_reason == "scapy-missing":
+                print("[fast] Scapy not available, unable to auto-select SYN mode.")
+            elif auto_syn_reason == "root-required":
+                print("[fast] Run with elevated privileges to allow SYN auto-selection.")
+            elif auto_syn_reason == "privilege-unknown":
+                print("[fast] Could not verify privileges; SYN auto-selection disabled.")
+
+        port_configuration = prepare_port_scan_configuration(parsed_arguments)
+    else:
+        print("[find] Port scanning disabled (no explicit port options supplied).")
+
+    event_loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(event_loop)
+        results = event_loop.run_until_complete(
+            perform_find_machines_discovery(
+                interfaces,
+                ping_command,
+                port_configuration,
+            )
+        )
+    finally:
+        asyncio.set_event_loop(None)
+        event_loop.close()
+
+    total_hosts = sum(len(hosts) for _, hosts in results)
+    if total_hosts == 0:
+        print("[find] No responsive hosts discovered across internal interfaces.")
+    else:
+        print(f"[find] Discovery complete: {total_hosts} responsive host(s) located.")
+
+    persisted_path = persist_discovered_targets(results)
+    if persisted_path:
+        print(f"[find] Saved discovered targets to {persisted_path}.")
+
 
 # [AUTO]Abort early when Scapy-driven modes cannot operate.
 def ensure_prerequisites_for_scapy(selected_mode: str) -> None:
@@ -1131,6 +1576,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
         "--start",
         type=int,
         default=int(DEFAULTS["START"]),
+        action=StoreValueAndMarkExplicit,
         help="Start port (inclusive). Default: %(default)s (PORTSCAN_START)."
     )
 
@@ -1138,11 +1584,13 @@ def build_cli_parser() -> argparse.ArgumentParser:
         "--end",
         type=int,
         default=int(DEFAULTS["END"]),
+        action=StoreValueAndMarkExplicit,
         help="End port (inclusive). Default: %(default)s (PORTSCAN_END)."
     )
 
     parser.add_argument(
         "--ports",
+        action=StoreValueAndMarkExplicit,
         help="Explicit list and ranges, e.g. 22,80,8000-8100 (overrides start/end)."
     )
 
@@ -1150,6 +1598,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
         "--top-ports",
         type=int,
         metavar="COUNT",
+        action=StoreValueAndMarkExplicit,
         help="Use first COUNT entries from top-ports.txt (overrides start/end/--ports)."
     )
 
@@ -1166,7 +1615,13 @@ def build_cli_parser() -> argparse.ArgumentParser:
         help="Per-host concurrency. Default: %(default)s (PORTSCAN_CONCURRENCY)."
     )
 
-    parser.set_defaults(timeout_explicit=PORTSCAN_TIMEOUT_ENV_SET)
+    parser.set_defaults(
+        timeout_explicit=PORTSCAN_TIMEOUT_ENV_SET,
+        start_explicit=False,
+        end_explicit=False,
+        ports_explicit=False,
+        top_ports_explicit=False,
+    )
     parser.add_argument(
         "--timeout",
         type=float,
@@ -1313,6 +1768,12 @@ def build_cli_parser() -> argparse.ArgumentParser:
         help="Wordlist file for --web-dir mode."
     )
 
+    parser.add_argument(
+        "--find-machines",
+        action="store_true",
+        help="Discover responsive hosts across internal networks and optionally scan configured ports."
+    )
+
     return parser
 
 # [AUTO]Execute the complete scanning workflow for supplied arguments.
@@ -1325,24 +1786,7 @@ def run_full_scan(parsed_arguments: argparse.Namespace) -> Tuple[List[ScanRecord
     )
     show_only_open_in_terminal = bool(getattr(parsed_arguments, "show_only_open", False))
 
-    top_ports_requested: Optional[int] = getattr(parsed_arguments, "top_ports", None)
-    ports_selected_for_scan: List[int]
-    if top_ports_requested is not None:
-        ignored_parts = ["--start/--end range"]
-        if parsed_arguments.ports:
-            ignored_parts.append("--ports specification")
-        ignored_text = " and ".join(ignored_parts)
-        print(f"[info] Using top ports list; ignoring {ignored_text}.")
-        ports_selected_for_scan = load_top_ports_from_file(
-            top_ports_requested,
-            getattr(parsed_arguments, "top_ports_file", None),
-        )
-    else:
-        ports_selected_for_scan = parse_port_specification(
-            parsed_arguments.start,
-            parsed_arguments.end,
-            parsed_arguments.ports,
-        )
+    ports_selected_for_scan, top_ports_requested = select_ports_for_arguments(parsed_arguments)
     if not ports_selected_for_scan:
         print("No ports selected.")
         sys.exit(1)
@@ -1919,6 +2363,10 @@ def main() -> None:
         success = run_web_directory_listing_tool(args.url, args.wordlist)
         if not success:
             sys.exit(1)
+        return
+
+    if getattr(args, "find_machines", False):
+        run_find_machines_mode(args)
         return
 
     if args.batch:
