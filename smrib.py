@@ -100,7 +100,6 @@ DATA_DIRECTORY = os.path.join(SCRIPT_DIRECTORY, "data")
 LOGS_DIRECTORY = os.path.join(SCRIPT_DIRECTORY, "logs")
 
 DEFAULT_FIND_TARGETS_FILENAME = "targets_internal.txt"
-DEFAULT_FIND_TARGETS_PING_FILENAME = "targets.txt"
 
 
 def default_log_artifact_path(filename: str) -> str:
@@ -1650,13 +1649,8 @@ def run_find_machines_mode(parsed_arguments: argparse.Namespace) -> None:
     additional_targets_explicit = bool(
         getattr(parsed_arguments, "find_machines_from_targets_file_explicit", False)
     )
-    ping_targets_path = getattr(
-        parsed_arguments,
-        "find_machines_from_targets_file_and_ping",
-        None,
-    )
-    ping_targets_explicit = bool(
-        getattr(parsed_arguments, "find_machines_from_targets_file_and_ping_explicit", False)
+    ping_targets_flag = bool(
+        getattr(parsed_arguments, "find_machines_from_targets_and_ping", False)
     )
 
     additional_interfaces: List[InterfaceNetwork] = []
@@ -1704,13 +1698,11 @@ def run_find_machines_mode(parsed_arguments: argparse.Namespace) -> None:
             f"targets file {targets_file_to_use}",
         )
 
-    ping_targets_to_use = ping_targets_path
+    ping_targets_to_use: Optional[str] = None
     quiet_missing_ping_targets = False
-    if ping_targets_explicit:
-        if not ping_targets_to_use:
-            ping_targets_to_use = DEFAULT_FIND_TARGETS_PING_FILENAME
-        if ping_targets_to_use == DEFAULT_FIND_TARGETS_PING_FILENAME:
-            quiet_missing_ping_targets = True
+    if ping_targets_flag:
+        ping_targets_to_use = targets_file_to_use
+        quiet_missing_ping_targets = quiet_missing_targets_file
 
     include_external_from_ping: Optional[bool] = None
     if ping_targets_to_use:
@@ -2377,16 +2369,11 @@ def build_cli_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--find-machines-from-targets-file-and-ping",
-        metavar="FILE",
-        dest="find_machines_from_targets_file_and_ping",
-        nargs="?",
-        action=StoreValueAndMarkExplicit,
-        const=DEFAULT_FIND_TARGETS_PING_FILENAME,
-        default=None,
+        "--find-machines-from-targets-and-ping",
+        action="store_true",
         help=(
-            "Optional file containing targets that should be validated with a ping probe during --find-machines. "
-            f"Defaults to {DEFAULT_FIND_TARGETS_PING_FILENAME!r} when omitted."
+            "When supplied, hosts sourced from --find-machines-from-targets-file will also be validated "
+            "with a ping probe during discovery."
         ),
     )
     parser.add_argument(
