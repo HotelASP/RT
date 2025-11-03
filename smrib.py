@@ -291,7 +291,7 @@ def is_external_ip(ip_text: str) -> bool:
     return True
 
 
-def gather_local_ipv4_interfaces() -> List[InterfaceNetwork]:
+def gather_local_ipv4_interfaces(include_external: bool = False) -> List[InterfaceNetwork]:
 
     def add_interface(result: Dict[Tuple[str, str], InterfaceNetwork], name: str,
                       address: str, netmask: str) -> None:
@@ -303,7 +303,7 @@ def gather_local_ipv4_interfaces() -> List[InterfaceNetwork]:
         except Exception:
             return
         ip_text = str(ipv4_address)
-        if is_external_ip(ip_text):
+        if not include_external and is_external_ip(ip_text):
             return
         if ipv4_address.is_loopback:
             return
@@ -408,7 +408,7 @@ def gather_local_ipv4_interfaces() -> List[InterfaceNetwork]:
         if key in collected or key in routed:
             return
         representative = str(network.network_address)
-        if is_external_ip(representative):
+        if not include_external and is_external_ip(representative):
             return
         routed[key] = InterfaceNetwork(
             name=interface_name,
@@ -1440,7 +1440,9 @@ def persist_discovered_targets(results: List[Tuple[InterfaceNetwork, List[str]]]
 # [AUTO]Discover responsive hosts across internal interfaces and optionally scan them.
 def run_find_machines_mode(parsed_arguments: argparse.Namespace) -> None:
 
-    interfaces = gather_local_ipv4_interfaces()
+    interfaces = gather_local_ipv4_interfaces(
+        include_external=bool(getattr(parsed_arguments, "find_include_external", False))
+    )
     if not interfaces:
         print("[find] No internal IPv4 interfaces detected.")
         return
@@ -1991,6 +1993,13 @@ def build_cli_parser() -> argparse.ArgumentParser:
         "--find-machines",
         action="store_true",
         help="Discover responsive hosts across internal networks and optionally scan configured ports."
+    )
+    parser.add_argument(
+        "--find-include-external",
+        action="store_true",
+        help=(
+            "Allow --find-machines to include non-private IPv4 networks discovered from interfaces or routes."
+        )
     )
 
     return parser
