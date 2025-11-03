@@ -717,11 +717,16 @@ async def discover_hosts_on_interface(interface: InterfaceNetwork,
     await asyncio.gather(*tasks, return_exceptions=False)
 
 
-def load_additional_find_networks(file_path: str) -> Tuple[List[InterfaceNetwork], Optional[bool]]:
+def load_additional_find_networks(
+    file_path: str,
+    *,
+    quiet_missing: bool = False,
+) -> Tuple[List[InterfaceNetwork], Optional[bool]]:
 
     resolved_path = _resolve_targets_file_path(file_path)
     if resolved_path is None:
-        print(f"[find] Additional targets file not found: {file_path}")
+        if not quiet_missing:
+            print(f"[find] Additional targets file not found: {file_path}")
         return [], None
 
     parsed_networks, include_external_setting = _parse_targets_file_into_networks(
@@ -1638,16 +1643,29 @@ def run_find_machines_mode(parsed_arguments: argparse.Namespace) -> None:
         "find_machines_from_targets_file",
         None,
     )
+    additional_targets_explicit = bool(
+        getattr(parsed_arguments, "find_machines_from_targets_file_explicit", False)
+    )
 
     additional_interfaces: List[InterfaceNetwork] = []
     include_external_from_targets: Optional[bool] = None
-    if additional_targets_path:
-        additional_interfaces, include_external_from_targets = load_additional_find_networks(
-            additional_targets_path
-        )
+
+    targets_file_to_use = additional_targets_path
+    quiet_missing_targets_file = False
+
+    if additional_targets_explicit:
+        if not targets_file_to_use:
+            targets_file_to_use = DEFAULT_FIND_TARGETS_FILENAME
+        if targets_file_to_use == DEFAULT_FIND_TARGETS_FILENAME:
+            quiet_missing_targets_file = True
     else:
+        targets_file_to_use = DEFAULT_FIND_TARGETS_FILENAME
+        quiet_missing_targets_file = True
+
+    if targets_file_to_use:
         additional_interfaces, include_external_from_targets = load_additional_find_networks(
-            DEFAULT_FIND_TARGETS_FILENAME
+            targets_file_to_use,
+            quiet_missing=quiet_missing_targets_file,
         )
 
     include_external_setting = (
@@ -2264,6 +2282,10 @@ def build_cli_parser() -> argparse.ArgumentParser:
         "--find-machines-from-targets-file",
         metavar="FILE",
         dest="find_machines_from_targets_file",
+        nargs="?",
+        action=StoreValueAndMarkExplicit,
+        const=DEFAULT_FIND_TARGETS_FILENAME,
+        default=None,
         help=(
             "Optional file containing additional CIDR ranges to explore during --find-machines. "
             f"Defaults to {DEFAULT_FIND_TARGETS_FILENAME!r} when omitted. Lines starting with # are ignored."
