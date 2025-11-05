@@ -95,6 +95,39 @@ DEFAULTS: Dict[str, object] = {
     "RATE": int(os.environ.get("PORTSCAN_RATE", "0")),  # [AUTO]Zero disables rate limiting
 }
 
+COMMON_TCP_SERVICES: Dict[int, str] = {
+    20: "FTP-DATA",
+    21: "FTP",
+    22: "SSH",
+    23: "Telnet",
+    25: "SMTP",
+    53: "DNS",
+    80: "HTTP",
+    110: "POP3",
+    123: "NTP",
+    143: "IMAP",
+    161: "SNMP",
+    389: "LDAP",
+    443: "HTTPS",
+    445: "SMB",
+    465: "SMTPS",
+    587: "Submission",
+    993: "IMAPS",
+    995: "POP3S",
+    1433: "MSSQL",
+    1521: "Oracle",
+    2049: "NFS",
+    2375: "Docker",
+    3306: "MySQL",
+    3389: "RDP",
+    5432: "PostgreSQL",
+    5900: "VNC",
+    6379: "Redis",
+    8080: "HTTP-ALT",
+    9200: "Elasticsearch",
+    11211: "Memcached",
+}
+
 SCRIPT_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 DATA_DIRECTORY = os.path.join(SCRIPT_DIRECTORY, "data")
 LOGS_DIRECTORY = os.path.join(SCRIPT_DIRECTORY, "logs")
@@ -1119,6 +1152,70 @@ def select_ports_for_arguments(parsed_arguments: argparse.Namespace) -> Tuple[Li
         getattr(parsed_arguments, "ports", None),
     )
     return ports_selected, None
+
+
+def _format_mode1_ports_descriptor(ports: List[int]) -> str:
+
+    if not ports:
+        return ""
+
+    sorted_ports = sorted(ports)
+    contiguous = sorted_ports[-1] - sorted_ports[0] + 1 == len(sorted_ports)
+    if contiguous:
+        if len(sorted_ports) == 1:
+            return f"{sorted_ports[0]}"
+        return f"{sorted_ports[0]} to {sorted_ports[-1]}"
+
+    return ", ".join(str(port) for port in sorted_ports)
+
+
+def _mode1_port_is_open(target: str, port: int, timeout_seconds: float) -> bool:
+
+    try:
+        with contextlib.closing(
+            socket.create_connection((target, port), timeout=timeout_seconds)
+        ):
+            return True
+    except (socket.timeout, ConnectionRefusedError):
+        return False
+    except OSError:
+        return False
+
+
+def run_mode1(parsed_arguments: argparse.Namespace) -> None:
+
+    targets = expand_targets_to_list(parsed_arguments.targets)
+    if not targets:
+        print("No targets.")
+        return
+
+    ports_selected, _ = select_ports_for_arguments(parsed_arguments)
+    if not ports_selected:
+        print("No ports selected.")
+        return
+
+    timeout_seconds = float(getattr(parsed_arguments, "timeout", DEFAULTS["TIMEOUT"]))
+    sorted_ports = sorted(set(ports_selected))
+    ports_descriptor = _format_mode1_ports_descriptor(sorted_ports)
+
+    for target in targets:
+        status_parts: List[str] = []
+        for port in sorted_ports:
+            is_open = _mode1_port_is_open(target, port, timeout_seconds)
+            if is_open:
+                service_name = COMMON_TCP_SERVICES.get(port)
+                if service_name:
+                    status_parts.append(f"[OPEN] {port} - {service_name}")
+                else:
+                    status_parts.append(f"[OPEN] {port}")
+            else:
+                status_parts.append(f"[CLOSED] {port}")
+
+        status_line = " ".join(status_parts)
+        if ports_descriptor:
+            print(f"Scanning target: {target} Ports: {ports_descriptor} {status_line}")
+        else:
+            print(f"Scanning target: {target} {status_line}")
 
 
 async def resolve_dns_label_to_ip(dns_label: str) -> str:
@@ -2238,7 +2335,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--targets",
+        "-t", "--targets",
         required=False,
         default=str(DEFAULTS["HOST"]),
         help=(
@@ -2264,7 +2361,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--ports",
+        "-p", "--ports",
         action=StoreValueAndMarkExplicit,
         help="Explicit list and ranges, e.g. 22,80,8000-8100 (overrides start/end)."
     )
@@ -2400,6 +2497,14 @@ def build_cli_parser() -> argparse.ArgumentParser:
         nargs="?",
         const="AUTO",
         help="Write packet captures to pcap file. With multiple targets, writes <base>.<ip>.pcap."
+    )
+
+    parser.add_argument(
+        "--mode1",
+        action="store_true",
+        help=(
+            "Run a basic TCP connect scan that reports open ports alongside common service names."
+        ),
     )
 
     mode_group = parser.add_mutually_exclusive_group()
@@ -3124,6 +3229,10 @@ def main() -> None:
         args = cli_parser.parse_args(provided_arguments)
 
     apply_default_terminal_visibility(args)
+
+    if getattr(args, "mode1", False):
+        run_mode1(args)
+        return
 
     if getattr(args, "web_dir", False):
         success = run_web_directory_listing_tool(args.url, args.wordlist)
