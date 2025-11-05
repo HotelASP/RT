@@ -56,6 +56,10 @@ All other CLI switches fall back to sane defaults (`False` for boolean toggles u
 
 Fast mode increases concurrency (subject to file descriptor guardrails), caps timeouts to 0.3 seconds, disables banner collection and retries, prefers SYN scanning when allowed, shuffles port order, and scans private/internal targets as-is. When Scapy is installed and the scanner runs with root privileges, fast mode now auto-switches to SYN probing and prints a helpful notice when that promotion is not possible. The terminal output will confirm the effective settings whenever `--fast` is used.
 
+### Compatibility mode (`--mode1`)
+
+Mode 1 intentionally turns off the asynchronous engine and instead walks the requested ports with a **single blocking** `socket.create_connection()` call at a time. It mirrors the behaviour of legacy shell scripts: deterministic ordering, no external dependencies beyond the Python standard library, and automatic mapping of common TCP service names. Because it does not use concurrency, banner collection, or retry logic, this mode trades features and throughput for simplicity. Expect it to be slower than the default scanner and *much* slower than `--fast`, especially on large port ranges.
+
 ## How the code is organised
 
 - **Argument parsing:** `build_cli_parser()` defines the command-line interface and wires default values from the `DEFAULTS` dictionary. Running without parameters simply produces a namespace populated by those defaults.
@@ -76,6 +80,7 @@ These entry points are heavily commented in the source file to assist new users 
 - `--syn` and `--udp` switch to Scapy-backed TCP SYN or UDP probing modes (root required).
 - `--rate`, `--concurrency`, `--timeout`, `--retries`, and `--retry-backoff` control performance and resilience.
 - `--fast` activates an aggressive profile that automatically tunes timeouts, concurrency, and mode selection for speed.
+- `--mode1` switches to a sequential, blocking TCP connect loop that favours determinism over speed.
 - `--batch`, `--batch-battery`, and `--web-dir` activate the specialized workflows described in the examples below.
 
 For quick experiments, you can export environment variables once (for example, `export PORTSCAN_HOST=scanme.nmap.org`) and then run `python3 smrib.py` repeatedly without retyping the host.
