@@ -1198,24 +1198,48 @@ def run_mode1(parsed_arguments: argparse.Namespace) -> None:
     sorted_ports = sorted(set(ports_selected))
     ports_descriptor = _format_mode1_ports_descriptor(sorted_ports)
 
+    def _format_port_listing(port: int) -> str:
+        service_name = COMMON_TCP_SERVICES.get(port)
+        if service_name:
+            return f"{port} ({service_name})"
+        return str(port)
+
     for target in targets:
-        status_parts: List[str] = []
+        start_time = time.perf_counter()
+        open_ports: List[int] = []
+        closed_ports: List[int] = []
+
         for port in sorted_ports:
             is_open = _mode1_port_is_open(target, port, timeout_seconds)
             if is_open:
-                service_name = COMMON_TCP_SERVICES.get(port)
-                if service_name:
-                    status_parts.append(f"[OPEN] {port} - {service_name}")
-                else:
-                    status_parts.append(f"[OPEN] {port}")
+                open_ports.append(port)
             else:
-                status_parts.append(f"[CLOSED] {port}")
+                closed_ports.append(port)
 
-        status_line = " ".join(status_parts)
+        duration = time.perf_counter() - start_time
+
         if ports_descriptor:
-            print(f"Scanning target: {target} Ports: {ports_descriptor} {status_line}")
+            print(f"Scanning target: {target} Ports: {ports_descriptor}")
         else:
-            print(f"Scanning target: {target} {status_line}")
+            print(f"Scanning target: {target}")
+
+        if open_ports:
+            open_listing = ", ".join(_format_port_listing(port) for port in open_ports)
+            print(f"  Open ports ({len(open_ports)}): {open_listing}")
+        else:
+            print("  Open ports (0): none detected")
+
+        if closed_ports:
+            closed_listing = ", ".join(str(port) for port in closed_ports)
+            print(f"  Closed ports ({len(closed_ports)}): {closed_listing}")
+        else:
+            print("  Closed ports (0): none detected")
+
+        print(
+            "  Summary: scanned {total} ports in {elapsed:.2f}s (timeout {timeout:.2f}s).".format(
+                total=len(sorted_ports), elapsed=duration, timeout=timeout_seconds
+            )
+        )
 
 
 async def resolve_dns_label_to_ip(dns_label: str) -> str:
