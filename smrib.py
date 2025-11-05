@@ -1333,21 +1333,6 @@ def select_ports_for_arguments(parsed_arguments: argparse.Namespace) -> Tuple[Li
     return ports_selected, None
 
 
-def _format_mode1_ports_descriptor(ports: List[int]) -> str:
-
-    if not ports:
-        return ""
-
-    sorted_ports = sorted(ports)
-    contiguous = sorted_ports[-1] - sorted_ports[0] + 1 == len(sorted_ports)
-    if contiguous:
-        if len(sorted_ports) == 1:
-            return f"{sorted_ports[0]}"
-        return f"{sorted_ports[0]} to {sorted_ports[-1]}"
-
-    return ", ".join(str(port) for port in sorted_ports)
-
-
 def _mode1_port_is_open(target: str, port: int, timeout_seconds: float) -> bool:
 
     try:
@@ -1389,7 +1374,6 @@ def run_mode1(parsed_arguments: argparse.Namespace) -> None:
 
     timeout_seconds = float(getattr(parsed_arguments, "timeout", DEFAULTS["TIMEOUT"]))
     sorted_ports = sorted(set(ports_selected))
-    ports_descriptor = _format_mode1_ports_descriptor(sorted_ports)
 
     show_closed_terminal = bool(getattr(parsed_arguments, "show_closed_terminal", False))
     show_closed_terminal_only = bool(
@@ -1423,10 +1407,7 @@ def run_mode1(parsed_arguments: argparse.Namespace) -> None:
 
         duration = time.perf_counter() - start_time
 
-        if ports_descriptor:
-            print(f"Scanning target: {target} Ports: {ports_descriptor}")
-        else:
-            print(f"Scanning target: {target}")
+        print(f"Scanning target: {target}")
 
         if show_open_summary:
             if open_ports:
