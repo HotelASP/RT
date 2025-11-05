@@ -1357,6 +1357,10 @@ def _mode1_port_is_open(target: str, port: int, timeout_seconds: float) -> bool:
 
 def run_mode1(parsed_arguments: argparse.Namespace) -> None:
 
+    # Respect the default terminal visibility rules so mode1 mirrors the
+    # behaviour of the primary scanning workflow.
+    apply_default_terminal_visibility(parsed_arguments)
+
     targets = expand_targets_to_list(parsed_arguments.targets)
     if not targets:
         print("No targets.")
@@ -1370,6 +1374,18 @@ def run_mode1(parsed_arguments: argparse.Namespace) -> None:
     timeout_seconds = float(getattr(parsed_arguments, "timeout", DEFAULTS["TIMEOUT"]))
     sorted_ports = sorted(set(ports_selected))
     ports_descriptor = _format_mode1_ports_descriptor(sorted_ports)
+
+    show_closed_terminal = bool(getattr(parsed_arguments, "show_closed_terminal", False))
+    show_closed_terminal_only = bool(
+        getattr(parsed_arguments, "show_closed_terminal_only", False)
+    )
+    show_only_open = bool(getattr(parsed_arguments, "show_only_open", False))
+
+    show_closed_summary = (
+        (show_closed_terminal or show_closed_terminal_only)
+        and not show_only_open
+    )
+    show_open_summary = not show_closed_terminal_only
 
     def _format_port_listing(port: int) -> str:
         service_name = COMMON_TCP_SERVICES.get(port)
@@ -1396,17 +1412,21 @@ def run_mode1(parsed_arguments: argparse.Namespace) -> None:
         else:
             print(f"Scanning target: {target}")
 
-        if open_ports:
-            open_listing = ", ".join(_format_port_listing(port) for port in open_ports)
-            print(f"  Open ports ({len(open_ports)}): {open_listing}")
-        else:
-            print("  Open ports (0): none detected")
+        if show_open_summary:
+            if open_ports:
+                open_listing = ", ".join(
+                    _format_port_listing(port) for port in open_ports
+                )
+                print(f"  Open ports ({len(open_ports)}): {open_listing}")
+            else:
+                print("  Open ports (0): none detected")
 
-        if closed_ports:
-            closed_listing = ", ".join(str(port) for port in closed_ports)
-            print(f"  Closed ports ({len(closed_ports)}): {closed_listing}")
-        else:
-            print("  Closed ports (0): none detected")
+        if show_closed_summary:
+            if closed_ports:
+                closed_listing = ", ".join(str(port) for port in closed_ports)
+                print(f"  Closed ports ({len(closed_ports)}): {closed_listing}")
+            else:
+                print("  Closed ports (0): none detected")
 
         print(
             "  Summary: scanned {total} ports in {elapsed:.2f}s (timeout {timeout:.2f}s).".format(
