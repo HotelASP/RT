@@ -37,6 +37,12 @@
 # 8. Web directory listing helper using HTTP wordlists.
 #    Command: sudo python3 smrib.py --web-dir --url http://www.hackthissite.org --wordlist 'data/webdir_wordlist.txt'
 #    Outcome: probes candidate paths from the wordlist and prints discovered HTTP status codes.
+#
+# 9. Compatibility-focused sequential TCP sweep.
+#    Command: python3 smrib.py --mode1 --targets scanme.nmap.org --ports "22,80,443" --show-closed-terminal
+#    Outcome: walks the requested ports one by one using blocking connect() calls, reporting open and closed
+#    results alongside the built-in common service name catalogue. This mode prioritises determinism and
+#    minimal dependencies at the cost of raw throughput compared to the asynchronous scanner.
 
 from __future__ import annotations
 
@@ -1356,6 +1362,16 @@ def _mode1_port_is_open(target: str, port: int, timeout_seconds: float) -> bool:
 
 
 def run_mode1(parsed_arguments: argparse.Namespace) -> None:
+    """Execute the compatibility "mode1" scanner.
+
+    Unlike the asyncio-powered workflows used elsewhere in the tool, mode1 sticks
+    to a deliberately simple, sequential TCP connect loop. Each target/port pair
+    is handled via a blocking ``socket.create_connection`` call so that the
+    behaviour matches traditional netcat-style scripts and remains easy to debug.
+    The trade-off is throughput: no concurrency, banner collection, or rate
+    limiter is involved, so scanning large port sets takes longer than the
+    default asynchronous engine (and much longer than ``--fast``).
+    """
 
     # Respect the default terminal visibility rules so mode1 mirrors the
     # behaviour of the primary scanning workflow.
@@ -2722,7 +2738,8 @@ def build_cli_parser() -> argparse.ArgumentParser:
         "--mode1",
         action="store_true",
         help=(
-            "Run a basic TCP connect scan that reports open ports alongside common service names."
+            "Compatibility mode that walks ports sequentially using blocking TCP connect() calls. "
+            "Helpful for deterministic troubleshooting, but slower than the default asynchronous scanner."
         ),
     )
 
