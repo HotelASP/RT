@@ -2614,6 +2614,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "-sc",
         "--show-closed-terminal",
         action="store_true",
         help=(
@@ -2628,6 +2629,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "-so",
         "--show-only-open",
         action="store_true",
         default=None,
@@ -2750,11 +2752,13 @@ def build_cli_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "-f",
         "--find-machines",
         action="store_true",
         help="Discover responsive hosts across internal networks and optionally scan configured ports."
     )
     parser.add_argument(
+        "-fe",
         "--find-include-external",
         metavar="{yes,no}",
         dest="find_include_external",
@@ -2766,6 +2770,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument(
+        "-ft",
         "--find-machines-from-targets-file",
         metavar="FILE",
         dest="find_machines_from_targets_file",
@@ -2779,6 +2784,7 @@ def build_cli_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "-fp",
         "--find-machines-from-targets-and-ping",
         action="store_true",
         help=(
